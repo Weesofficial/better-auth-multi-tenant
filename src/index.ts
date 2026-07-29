@@ -16,23 +16,17 @@ export {
 } from "./resolver.js";
 export type { ResolverOptions, TenantResolution, TenantRejection } from "./resolver.js";
 
-/** The minimum a tenant record must expose for this plugin to gate on it. */
-export interface Tenant {
-  id: string;
-  slug: string;
-  /** Anything other than `"active"` is refused with 403. */
-  status?: string;
-  [key: string]: unknown;
-}
+import {
+  getTenantFromContext,
+  setTenantOnContext,
+  type ResolvedTenant,
+  type Tenant,
+} from "./context.js";
 
-/** What the plugin attaches to the auth context for the current request. */
-export interface ResolvedTenant {
-  slug: string;
-  tenant: Tenant;
-  source: "host" | "header";
-}
-
-const CONTEXT_KEY = "multiTenant" as const;
+export { getTenantFromContext } from "./context.js";
+export type { ResolvedTenant, Tenant } from "./context.js";
+export { tenantSessionHooks } from "./session-hooks.js";
+export type { TenantSessionHookOptions } from "./session-hooks.js";
 
 export interface MultiTenantOptions extends ResolverOptions {
   /**
@@ -191,7 +185,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
               tenant,
               source: resolution.source,
             };
-            (ctx.context as Record<string, unknown>)[CONTEXT_KEY] = resolved;
+            setTenantOnContext(ctx.context, resolved);
             await onTenantResolved?.(resolved, path);
           }),
         },
@@ -200,9 +194,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
           // be usable on tenant B's host, no matter what the caller sends.
           matcher: (ctx) => enforceSessionTenant(ctx.path ?? ""),
           handler: createAuthMiddleware(async (ctx) => {
-            const resolved = (ctx.context as Record<string, unknown>)[CONTEXT_KEY] as
-              | ResolvedTenant
-              | undefined;
+            const resolved = getTenantFromContext(ctx.context);
             if (!resolved) return;
 
             const session = await getSessionFromCtx(ctx);
@@ -229,9 +221,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         "/multi-tenant/current",
         { method: "GET" },
         async (ctx) => {
-          const resolved = (ctx.context as Record<string, unknown>)[CONTEXT_KEY] as
-            | ResolvedTenant
-            | undefined;
+          const resolved = getTenantFromContext(ctx.context);
           if (!resolved) {
             throw new APIError("BAD_REQUEST", {
               code: "TENANT_REQUIRED",
@@ -248,16 +238,5 @@ export const multiTenant = (options: MultiTenantOptions) => {
     },
   } satisfies BetterAuthPlugin;
 };
-
-/**
- * Read the tenant resolved for the current request.
- *
- * Returns `null` when the request carried no tenant — callers that require one
- * should say so via `requireTenant` rather than assuming this is non-null.
- */
-export function getTenantFromContext(context: unknown): ResolvedTenant | null {
-  const value = (context as Record<string, unknown> | null)?.[CONTEXT_KEY];
-  return (value as ResolvedTenant | undefined) ?? null;
-}
 
 export type MultiTenantPlugin = ReturnType<typeof multiTenant>;

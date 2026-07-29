@@ -28,7 +28,7 @@ for.
 
 ```ts
 import { betterAuth } from "better-auth";
-import { multiTenant } from "better-auth-multi-tenant";
+import { multiTenant, tenantSessionHooks } from "better-auth-multi-tenant";
 
 export const auth = betterAuth({
   plugins: [
@@ -37,6 +37,8 @@ export const auth = betterAuth({
       getTenant: (slug) => db.tenant.findUnique({ where: { slug } }),
     }),
   ],
+  // Binds every new session to the tenant it was created on.
+  databaseHooks: tenantSessionHooks(),
 });
 ```
 
@@ -141,27 +143,33 @@ for (const path of ["/api/students", "/api/invoices", "/api/reports"]) {
 }
 ```
 
-## Scope
+## Binding sessions to tenants
 
-This is `0.1.0`. Tenant resolution, cross-tenant session rejection and callback
-origins are implemented and tested. Query-level data isolation helpers and
-per-tenant OAuth provider configuration are not in this release.
-
-Stamping `session.tenantId` at sign-in is left to your `databaseHooks` for now,
-so the plugin does not take ownership of session creation:
+`tenantSessionHooks()` stamps each new session with the tenant its request
+resolved to. It is a plain `databaseHooks` fragment rather than something the
+plugin does behind your back, so it composes with hooks you already have:
 
 ```ts
 databaseHooks: {
-  session: {
-    create: {
-      before: async (session, ctx) => {
-        const resolved = getTenantFromContext(ctx?.context);
-        return { data: { ...session, tenantId: resolved?.tenant.id } };
-      },
-    },
-  },
+  ...tenantSessionHooks(),
+  user: { create: { before: myUserHook } },
 }
 ```
+
+It fails closed. A session created on a request that carried no tenant is
+refused, because an untagged session is one the cross-tenant guard cannot check
+— in other words, a credential that works on every tenant. If you knowingly
+serve sign-in from the apex domain, opt out explicitly:
+
+```ts
+tenantSessionHooks({ onMissingTenant: "allow" })
+```
+
+## Scope
+
+Tenant resolution, session binding, cross-tenant rejection and callback origins
+are implemented and tested. Query-level data isolation helpers and per-tenant
+OAuth provider configuration are not in this release.
 
 ## Contributing
 

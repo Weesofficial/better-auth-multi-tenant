@@ -1,0 +1,47 @@
+name: Release
+
+# Publishes to npm when a GitHub Release is published. Cutting the release is a
+# deliberate human step; everything after it is automated.
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required for npm provenance: npm signs the package with a statement
+      # tying it to this workflow run and commit, so consumers can verify the
+      # tarball really came from this repository.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - run: npm ci
+
+      # The same gates CI runs, repeated here so a release can never ship
+      # something that would have failed on a pull request.
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+      # Refuse to publish if the tag and package.json disagree, which is the
+      # usual way a release ends up mislabelled.
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "Tag $TAG does not match package.json version $PKG" >&2
+            exit 1
+          fi
+
+      - run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
