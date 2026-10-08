@@ -105,10 +105,7 @@ export function resolveTenantSlug(
   } = options;
 
   if (allowHeaderOverride && headerValue) {
-    const slug = headerValue.trim().toLowerCase();
-    if (!slugPattern.test(slug)) return { ok: false, reason: "malformed-slug" };
-    if (reserved.includes(slug)) return { ok: false, reason: "reserved-subdomain" };
-    return { ok: true, slug, source: "header" };
+    return finish(headerValue.trim().toLowerCase(), "header");
   }
 
   const h = normalizeHost(host);
@@ -127,15 +124,16 @@ export function resolveTenantSlug(
     if (!allowNestedSubdomains) return { ok: false, reason: "nested-subdomain" };
     // Left-most label wins: `acme.eu.example.com` -> `acme`.
     const [left] = sub.split(".");
-    return finish(left!);
+    return finish(left!, "host");
   }
 
-  return finish(sub);
+  return finish(sub, "host");
 
-  function finish(slug: string): TenantResolution {
+  // Header and host slugs pass the same checks, in the same order.
+  function finish(slug: string, source: "host" | "header"): TenantResolution {
     if (reserved.includes(slug)) return { ok: false, reason: "reserved-subdomain" };
     if (!slugPattern.test(slug)) return { ok: false, reason: "malformed-slug" };
-    return { ok: true, slug, source: "host" };
+    return { ok: true, slug, source };
   }
 }
 

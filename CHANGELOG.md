@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.3.0
+
+### Breaking
+
+- Sessions with no `tenantId` are now refused on tenant hosts with
+  `403 UNBOUND_SESSION`. Previously they were let through, which made a session
+  minted before the plugin was installed (or on the apex domain) valid on every
+  tenant. If you have such sessions in flight, set
+  `multiTenant({ unboundSessions: "allow" })` until they expire.
+
+### Added
+
+- `requireTenantFromContext(ctx.context)` — returns the resolved tenant or throws
+  `400 TENANT_REQUIRED`, for use in your own endpoints and hooks.
+- `protocol` and `port` options, so `/multi-tenant/current` reports the right
+  `origin` in local development (`http://acme.localhost.test:3000`).
+- End-to-end tests that run the plugin inside a real Better Auth instance.
+
+### Fixed
+
+- The paths exempt from the session-tenant check now match whole path segments.
+  `/sign-in/email` is still exempt; a custom `/sign-in-as` or `/okta` route no
+  longer is just because it shares a prefix.
+
 ## 0.2.0
 
 ### Added

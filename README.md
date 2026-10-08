@@ -69,7 +69,9 @@ is decided by DNS and TLS rather than by anything the caller can edit. `www`,
 `api`, `app`, `admin` and friends are reserved and never resolve to a tenant.
 
 **Cross-tenant rejection.** A session carrying `tenantId: A` that arrives on
-tenant B's host is refused with `403 CROSS_TENANT_SESSION`. This is the property
+tenant B's host is refused with `403 CROSS_TENANT_SESSION`. A session carrying
+no tenant at all is refused with `403 UNBOUND_SESSION`, since it would otherwise
+be valid on every tenant. This is the property
 worth testing in your own suite — see [Testing isolation](#testing-isolation).
 
 **Fail closed.** `requireTenant` defaults to requiring a tenant on every path. A
@@ -115,6 +117,9 @@ and reserved list as a subdomain.
 | `requireTenant` | `() => true` | Whether a path must carry a tenant. |
 | `enforceSessionTenant` | all but auth entry points | Paths where the session's tenant must match the host's. |
 | `getSessionTenantId` | `session.session.tenantId` | How to read a session's tenant. |
+| `unboundSessions` | `"reject"` | `"allow"` lets sessions with no tenant through. Use only while migrating. |
+| `protocol` | `"https"` | Protocol of the `origin` returned by `/multi-tenant/current`. |
+| `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
 | `onTenantResolved` | — | Called after each successful resolution. |
 
 ## Error codes
@@ -125,6 +130,25 @@ and reserved list as a subdomain.
 | `TENANT_NOT_FOUND` | 404 | `getTenant` returned `null`. |
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
 | `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant. |
+| `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
+
+## Reading the tenant in your own code
+
+`requireTenantFromContext` returns the tenant resolved for the request, or
+throws `400 TENANT_REQUIRED` when there is none — so a path exempted by
+`requireTenant` fails closed instead of crashing on `null`:
+
+```ts
+import { createAuthEndpoint } from "better-auth/api";
+import { requireTenantFromContext } from "better-auth-multi-tenant";
+
+createAuthEndpoint("/projects", { method: "GET" }, async (ctx) => {
+  const { tenant } = requireTenantFromContext(ctx.context);
+  return ctx.json(await db.project.findMany({ where: { tenantId: tenant.id } }));
+});
+```
+
+`getTenantFromContext` is the non-throwing variant and returns `null` instead.
 
 ## Testing isolation
 
