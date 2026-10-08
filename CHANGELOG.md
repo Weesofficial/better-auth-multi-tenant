@@ -9,6 +9,9 @@
   minted before the plugin was installed (or on the apex domain) valid on every
   tenant. If you have such sessions in flight, set
   `multiTenant({ unboundSessions: "allow" })` until they expire.
+- Node 18 is no longer supported. Better Auth 1.6's own dependencies require
+  Node 20.19 or later, so the plugin could not sign anyone in on Node 18 anyway;
+  `engines` now says so.
 
 ### Added
 
@@ -16,7 +19,8 @@
   `400 TENANT_REQUIRED`, for use in your own endpoints and hooks.
 - `protocol` and `port` options, so `/multi-tenant/current` reports the right
   `origin` in local development (`http://acme.localhost.test:3000`).
-- End-to-end tests that run the plugin inside a real Better Auth instance.
+- End-to-end tests that run the plugin inside a real Better Auth instance, on
+  Node 20, 22 and 24.
 
 ### Fixed
 
