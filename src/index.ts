@@ -18,12 +18,13 @@ export type { ResolverOptions, TenantResolution, TenantRejection } from "./resol
 
 import {
   getTenantFromContext,
+  requireTenantFromContext,
   setTenantOnContext,
   type ResolvedTenant,
   type Tenant,
 } from "./context.js";
 
-export { getTenantFromContext } from "./context.js";
+export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
 export { tenantSessionHooks } from "./session-hooks.js";
 export type { TenantSessionHookOptions } from "./session-hooks.js";
@@ -51,6 +52,25 @@ export interface MultiTenantOptions extends ResolverOptions {
    * is bound to anything.
    */
   enforceSessionTenant?: (path: string) => boolean;
+  /**
+   * What to do with a session that carries no tenant id when it shows up on a
+   * tenant's host — typically one minted before the plugin was installed, or on
+   * the apex domain.
+   *
+   * `"reject"` (the default) refuses it with `403 UNBOUND_SESSION`. An untagged
+   * session cannot be checked against the host, so accepting it means it works
+   * on every tenant.
+   *
+   * `"allow"` lets it through. Use it only while migrating existing sessions.
+   */
+  unboundSessions?: "reject" | "allow";
+  /**
+   * Protocol reported in the `origin` returned by `/multi-tenant/current`.
+   * Defaults to `"https"`; set `"http"` for local development.
+   */
+  protocol?: string;
+  /** Port reported in the `origin` returned by `/multi-tenant/current`. */
+  port?: number;
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
 }
@@ -68,8 +88,10 @@ const UNBOUND_PATHS = [
   "/ok",
 ];
 
+// Match whole path segments, so `/sign-in/email` is an entry point but
+// `/sign-in-as-admin` or `/okta` is not.
 const defaultEnforceSessionTenant = (path: string) =>
-  !UNBOUND_PATHS.some((p) => path.startsWith(p));
+  !UNBOUND_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
 
 const REJECTION_STATUS: Record<TenantRejection, "BAD_REQUEST" | "NOT_FOUND"> = {
   "no-host": "BAD_REQUEST",
@@ -109,6 +131,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getSessionTenantId = (session) =>
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
     enforceSessionTenant = defaultEnforceSessionTenant,
+    unboundSessions = "reject",
+    protocol,
+    port,
     onTenantResolved,
     ...resolverOptions
   } = options;
@@ -141,6 +166,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
       CROSS_TENANT_SESSION: {
         code: "CROSS_TENANT_SESSION",
         message: "This session belongs to a different tenant",
+      },
+      UNBOUND_SESSION: {
+        code: "UNBOUND_SESSION",
+        message: "This session is not bound to a tenant",
       },
     },
 
@@ -202,8 +231,14 @@ export const multiTenant = (options: MultiTenantOptions) => {
 
             const sessionTenantId = getSessionTenantId(session);
             // A session with no tenant predates the plugin (or was minted on the
-            // apex). Treat it as unbound rather than as belonging to everyone.
-            if (!sessionTenantId) return;
+            // apex). Accepting it would make it valid on every tenant.
+            if (!sessionTenantId) {
+              if (unboundSessions === "allow") return;
+              throw new APIError("FORBIDDEN", {
+                code: "UNBOUND_SESSION",
+                message: "This session is not bound to a tenant",
+              });
+            }
 
             if (sessionTenantId !== resolved.tenant.id) {
               throw new APIError("FORBIDDEN", {
@@ -221,17 +256,11 @@ export const multiTenant = (options: MultiTenantOptions) => {
         "/multi-tenant/current",
         { method: "GET" },
         async (ctx) => {
-          const resolved = getTenantFromContext(ctx.context);
-          if (!resolved) {
-            throw new APIError("BAD_REQUEST", {
-              code: "TENANT_REQUIRED",
-              message: "No tenant for this request",
-            });
-          }
+          const resolved = requireTenantFromContext(ctx.context);
           return ctx.json({
             id: resolved.tenant.id,
             slug: resolved.slug,
-            origin: tenantOrigin(resolved.slug, resolverOptions),
+            origin: tenantOrigin(resolved.slug, { ...resolverOptions, protocol, port }),
           });
         },
       ),

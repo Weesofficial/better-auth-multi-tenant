@@ -1,6 +1,6 @@
 {
   "name": "better-auth-multi-tenant",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Subdomain-based multi-tenancy for Better Auth: tenant resolution from the request host, tenant-bound sessions, and cross-tenant request rejection.",
   "keywords": [
     "better-auth",
@@ -50,6 +50,6 @@
     "typescript": "^5.7.2"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=20.19"
   }
 }
