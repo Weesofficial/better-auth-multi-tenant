@@ -171,6 +171,99 @@ On a tenant's host:
 Membership checks stay with the `organization` plugin: the user still has to be
 a member of the tenant's organization.
 
+### Teams
+
+With `organization({ teams: { enabled: true } })` and `getOrganizationId`, the
+team routes are scoped to the tenant's organization too. On a tenant's host:
+
+- `create-team`, `update-team`, `remove-team`, `list-teams`, `list-user-teams`,
+  `add-team-member` and `remove-team-member` refuse an explicit
+  `organizationId` that is not the tenant's (`ORGANIZATION_TENANT_MISMATCH`).
+  Leave it out and the tenant's organization is used.
+- Any route that names a team (`teamId`, including `list-team-members`, which
+  finds a team by id alone) refuses a team of another organization with
+  `403 TEAM_TENANT_MISMATCH`.
+- A session that still has another organization active (it predates the
+  bridge) cannot use the team routes until it is switched to the tenant's.
+- `list-user-teams` only returns the tenant's teams. It lists the user's teams
+  in every organization otherwise.
+- `activeTeamId` can only be set to a team of the tenant's organization, on
+  every write: `set-active-team`, accepting an invitation and so on. Clearing the active organization (leaving it, say) clears the
+  active team with it.
+
+## With `@better-auth/sso`
+
+[`@better-auth/sso`](https://www.better-auth.com/docs/plugins/sso) is an
+optional peer dependency: the plugin works without it, and nothing here loads it.
+Tell the plugin which providers belong to a tenant, by organization or by
+domain:
+
+```ts
+multiTenant({
+  baseDomain: "example.com",
+  getTenant,
+  // Providers registered with `organizationId` belong to that tenant...
+  getOrganizationId: (tenant) => tenant.organizationId,
+  // ...and so do providers with no organization whose domains are listed here.
+  getSSODomains: (tenant) => tenant.emailDomains,
+});
+```
+
+Setting either option turns the checks on; without them SSO is untouched. On a
+tenant's host, every provider the request reaches has to belong to the tenant,
+else `403 SSO_PROVIDER_TENANT_MISMATCH`:
+
+- **Sign-in** (`/sign-in/sso`). The provider is chosen from the tenant's own
+  providers (by `providerId`, `organizationSlug`, `domain` or `email`) and then
+  pinned by id before the SSO plugin runs. Two tenants sharing a domain cannot
+  make a sign-in resolve to the other one's provider.
+- **Registration** (`/sso/register`). `organizationId` must be the tenant's
+  organization and is filled in when left out. A provider with no organization
+  needs a `domain` the tenant owns.
+- **Callbacks and SAML routes** (`/sso/callback/:providerId`,
+  `/sso/saml2/...`) and **provider management** (`get-provider`,
+  `update-provider`, `delete-provider`, the domain verification routes). The
+  provider named in the path, query or body must belong to the host's tenant.
+  A callback that lands on another tenant's host is refused before the SSO
+  plugin reads the state or creates a user. Changing a domain-owned provider's
+  `domain` to one the tenant does not own is refused too.
+
+A provider belongs to the tenant of its organization, whatever its `domain`
+says. One with no organization belongs to the tenant when **all** of its
+(comma-separated) domains are one of the tenant's `getSSODomains`, or a
+subdomain of one. Providers from the SSO plugin's `defaultSSO` option are not in
+the database, so they belong to no tenant and are refused on tenant hosts.
+
+The session a callback creates is stamped with the tenant of the host it lands
+on (`tenantSessionHooks()`), and the provider check makes that the tenant that
+started the flow, since a provider belongs to one tenant.
+
+Limits, because the SSO plugin's callback design leaves no safe way to do more
+through public hooks:
+
+- **The callback must land on the tenant's own host.** The redirect URL is
+  `{baseURL}/sso/callback/{providerId}`, so with one fixed `baseURL` every flow
+  returns to one host, which is not the tenant's. Use a `baseURL` that follows
+  the request host (Better Auth's dynamic `baseURL` with `allowedHosts`, where
+  your version has it), and register each tenant's redirect URL with the
+  identity provider. This repository's tests drive the callback on tenant hosts
+  directly; they do not run a dynamic `baseURL`. A callback on a host that names no
+  tenant creates no session: `tenantSessionHooks()` refuses an unbound session,
+  so keep its default `onMissingTenant: "reject"` when you use SSO.
+- **The shared callback is refused on a tenant's host.** With the SSO plugin's
+  `redirectURI` option, `/sso/callback` learns the provider from the OAuth
+  state, which only the SSO plugin can read. It cannot be checked, so it gets
+  `SSO_PROVIDER_TENANT_MISMATCH` on a tenant's host.
+- **SAML responses are not bound to a host.** The IdP posts to the ACS URL
+  cross-site, so no cookie ties the response to the host that started the
+  flow. The provider check still applies, which covers a response, or an
+  IdP-initiated one, sent to the wrong tenant's host.
+- **`GET /sso/providers` is not filtered.** It lists the providers the signed-in
+  user administers in every organization. Filter on `organizationId` in your
+  own code if tenants must not see each other's.
+- **Users are global**, as ever: an SSO sign-in links to an existing account
+  with the same email, on any tenant.
+
 ## Cookies across subdomains
 
 Leave Better Auth's `advanced.crossSubDomainCookies` **off**. It puts one
@@ -190,6 +283,10 @@ What the plugin enforces on a tenant's host:
   active: `set-active`, `organization/create` (unless
   `keepCurrentActiveOrganization: true`), accepting an invitation and so on.
   Clearing the active organization is allowed, since it only removes access.
+- With `getOrganizationId`, team routes only touch the tenant's teams, and with
+  `getOrganizationId` or `getSSODomains`, SSO only uses the tenant's providers.
+  See [Teams](#teams) and [With `@better-auth/sso`](#with-better-authsso) for
+  what is and is not covered.
 
 What it does **not** do, so you can plan for it:
 
@@ -215,7 +312,8 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `baseDomain` | — | Apex domain tenants live under, e.g. `example.com`. |
 | `getTenant` | — | `(slug) => Tenant \| null`. `null` becomes a 404. |
 | `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
-| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts. See [With the `organization` plugin](#with-the-organization-plugin). |
+| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts, scopes teams and `activeTeamId` to it, and ties SSO providers to it. See [With the `organization` plugin](#with-the-organization-plugin). |
+| `getSSODomains` | — | `(tenant) => string[]`. Email domains a tenant owns, for SSO providers with no organization. Turns on the SSO checks. See [With `@better-auth/sso`](#with-better-authsso). |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
 | `slugPattern` | DNS label, lowercase | Shape a slug must match. |
 | `allowNestedSubdomains` | `false` | Let `acme.eu.example.com` resolve to `acme`. |
@@ -238,7 +336,9 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
 | `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant. |
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
-| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's (see `getOrganizationId`). |
+| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or a team route named another organization (see `getOrganizationId`). |
+| `TEAM_TENANT_MISMATCH` | 403 | A team route or `activeTeamId` named a team of another tenant's organization. |
+| `SSO_PROVIDER_TENANT_MISMATCH` | 403 | An SSO sign-in, registration, callback or provider route reached a provider that does not belong to the tenant (see `getSSODomains`). |
 
 ## Reading the tenant in your own code
 

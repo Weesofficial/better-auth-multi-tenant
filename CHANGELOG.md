@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Teams. With `organization({ teams: { enabled: true } })` and
+  `getOrganizationId`, team routes only work on the tenant's organization: an
+  explicit `organizationId` for another one is `403 ORGANIZATION_TENANT_MISMATCH`,
+  a `teamId` of another organization's team is `403 TEAM_TENANT_MISMATCH`
+  (including `list-team-members`, which looks a team up by id alone), and
+  `list-user-teams` returns only the tenant's teams. `activeTeamId` can only be
+  set to one of the tenant's teams, on every session write, and is cleared when
+  the active organization is.
+- SSO. With `@better-auth/sso` and `getOrganizationId` or the new
+  `getSSODomains(tenant)`, sign-in, registration, callbacks, SAML routes and
+  provider management on a tenant's host only use that tenant's providers
+  (`403 SSO_PROVIDER_TENANT_MISMATCH`). Sign-in picks the tenant's provider
+  itself and pins it by id. A callback that lands on another tenant's host is
+  refused before any user or session is created. See the README for the limits:
+  the shared `redirectURI` callback is refused on tenant hosts, SAML responses
+  are not bound to the host that started the flow, and `GET /sso/providers` is
+  not filtered.
+- `@better-auth/sso` is an optional peer dependency (`>=1.6.0`). Nothing in the
+  plugin loads it.
+- CI also runs the suite against the latest and the 1.6 releases of
+  `better-auth` and `@better-auth/sso`.
+
+### Changed
+
+- `/sso/callback` and `/sso/saml2/sp/acs` no longer need a session that matches
+  the host: like the other callback routes, they run before a session is bound.
+- Development dependencies moved to `better-auth` and `@better-auth/sso`
+  `^1.7.12`. The `better-auth` peer range is still `>=1.6.0`.
+
 ## 0.4.1
 
 ### Security
