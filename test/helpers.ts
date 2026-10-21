@@ -47,7 +47,7 @@ export function setup(
     ...authOverrides,
   });
 
-  const request = (host: string, path: string, init: { method?: string; body?: unknown; cookie?: string } = {}) =>
+  const request = (host: string, path: string, init: { method?: string; body?: unknown; cookie?: string; authorization?: string } = {}) =>
     auth.handler(
       new Request(`http://${host}/api/auth${path}`, {
         method: init.method ?? "GET",
@@ -57,6 +57,7 @@ export function setup(
           origin: `http://${host}`,
           "content-type": "application/json",
           ...(init.cookie ? { cookie: init.cookie } : {}),
+          ...(init.authorization ? { authorization: init.authorization } : {}),
         },
       }),
     );

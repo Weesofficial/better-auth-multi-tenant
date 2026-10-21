@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.1
+
+### Security
+
+- **Bearer tokens bypassed the cross-tenant check.** With Better Auth's
+  `bearer` plugin, a token issued on one tenant was accepted on another, for
+  reads and writes, because the bearer plugin only turns `Authorization` into
+  a session cookie after all before-hooks have run. The check now also looks
+  up the session behind a bearer token, and refuses a foreign token even when
+  a valid cookie is sent alongside it. Affects every earlier version when the
+  `bearer` plugin is installed. Upgrade.
+- **The organization lock covered only `set-active`.** With
+  `getOrganizationId` (new in 0.4.0), `organization/create`,
+  `accept-invitation` and other organization routes could still make another
+  organization active on a tenant's host, giving a user owner rights there in
+  apps that authorise against the active organization. Every session write is
+  now checked, and `organization/create` on a tenant host requires
+  `keepCurrentActiveOrganization: true`.
+
+### Docs
+
+- New *Security notes* section: what is enforced, and what is not (users are
+  global, suspended versus unknown tenants, your own queries).
+
 ## 0.4.0
 
 0.3.0 was never published to npm, so upgrading from 0.2.0 picks up the

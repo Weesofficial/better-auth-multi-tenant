@@ -33,7 +33,8 @@ export type { TenantSessionHookOptions } from "./session-hooks.js";
 export interface MultiTenantOptions extends ResolverOptions {
   /**
    * Look up a tenant by slug. Return `null` for unknown slugs — the plugin
-   * turns that into a 404 rather than leaking whether the slug exists.
+   * turns that into a 404. An inactive tenant is a 403 instead, so return
+   * `null` for those too if their existence must not be visible.
    */
   getTenant: (slug: string) => Promise<Tenant | null> | Tenant | null;
   /**
@@ -113,6 +114,28 @@ const UNBOUND_PATHS = [
 const defaultEnforceSessionTenant = (path: string) =>
   !UNBOUND_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
 
+/**
+ * The session behind an `Authorization: Bearer` header, if any. Used only to
+ * refuse a request, never to allow one, so the token's signature need not be
+ * checked here: the bearer plugin does that before it authenticates anything.
+ */
+async function findBearerSession(ctx: {
+  headers?: Headers;
+  context: { internalAdapter: { findSession: (token: string) => Promise<unknown> } };
+}) {
+  const header = ctx.headers?.get("authorization");
+  if (!header || !/^bearer\s/i.test(header)) return null;
+  let value = header.slice(7).trim();
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // Not URI-encoded; use as is.
+  }
+  // Signed tokens are `token.signature`; the session token is the first part.
+  const token = value.split(".")[0];
+  return token ? ctx.context.internalAdapter.findSession(token) : null;
+}
+
 /** Refuse unknown tenants (404, without saying why) and inactive ones (403). */
 function assertActive(tenant: Tenant | null): Tenant {
   if (!tenant) {
@@ -187,6 +210,31 @@ export const multiTenant = (options: MultiTenantOptions) => {
             "Turn it off unless you deliberately want a single sign-in across tenants.",
         );
       }
+
+      if (!getOrganizationId) return;
+      return {
+        options: {
+          databaseHooks: {
+            session: {
+              update: {
+                // The set-active check covers one route; organization create,
+                // accept-invitation and others move activeOrganizationId too.
+                // Catch every write here. Clearing it is allowed: that only
+                // drops privileges, and leave/remove-member need it.
+                before: async (data: Record<string, unknown>, hookCtx: { context?: unknown } | null) => {
+                  const expected = getTenantFromContext(hookCtx?.context)?.organizationId;
+                  const next = data.activeOrganizationId;
+                  if (!expected || next === undefined || next === null || next === expected) return;
+                  throw new APIError("FORBIDDEN", {
+                    code: "ORGANIZATION_TENANT_MISMATCH",
+                    message: "Only this tenant's organization can be active here",
+                  });
+                },
+              },
+            },
+          },
+        },
+      };
     },
 
     schema: {
@@ -271,31 +319,51 @@ export const multiTenant = (options: MultiTenantOptions) => {
             const resolved = getTenantFromContext(ctx.context);
             if (!resolved) return;
 
-            const session = await getSessionFromCtx(ctx);
-            if (!session) return; // Unauthenticated: let the normal 401 path handle it.
+            // Check the cookie session and any bearer token. The bearer plugin
+            // only turns `Authorization` into a cookie after every before-hook
+            // has run, so getSessionFromCtx cannot see it here.
+            const sessions = [await getSessionFromCtx(ctx), await findBearerSession(ctx)];
 
-            const sessionTenantId = getSessionTenantId(session);
-            // A session with no tenant predates the plugin (or was minted on the
-            // apex). Accepting it would make it valid on every tenant.
-            if (!sessionTenantId) {
-              if (unboundSessions === "allow") return;
-              throw new APIError("FORBIDDEN", {
-                code: "UNBOUND_SESSION",
-                message: "This session is not bound to a tenant",
-              });
-            }
+            for (const session of sessions) {
+              if (!session) continue; // Unauthenticated: the normal 401 path handles it.
 
-            if (sessionTenantId !== resolved.tenant.id) {
-              throw new APIError("FORBIDDEN", {
-                code: "CROSS_TENANT_SESSION",
-                message: "This session belongs to a different tenant",
-              });
+              const sessionTenantId = getSessionTenantId(session);
+              // A session with no tenant predates the plugin (or was minted on
+              // the apex). Accepting it would make it valid on every tenant.
+              if (!sessionTenantId) {
+                if (unboundSessions === "allow") continue;
+                throw new APIError("FORBIDDEN", {
+                  code: "UNBOUND_SESSION",
+                  message: "This session is not bound to a tenant",
+                });
+              }
+
+              if (sessionTenantId !== resolved.tenant.id) {
+                throw new APIError("FORBIDDEN", {
+                  code: "CROSS_TENANT_SESSION",
+                  message: "This session belongs to a different tenant",
+                });
+              }
             }
           }),
         },
         {
           // With an organization bridge, a tenant's host only ever has that
           // tenant's organization active.
+          // Creating an organization makes it active unless the caller keeps
+          // the current one. Refuse before anything is written, so a tenant host
+          // never ends up with a half-created organization.
+          matcher: (ctx) => ctx.path === "/organization/create",
+          handler: createAuthMiddleware(async (ctx) => {
+            if (!getTenantFromContext(ctx.context)?.organizationId) return;
+            if ((ctx.body as { keepCurrentActiveOrganization?: boolean } | undefined)?.keepCurrentActiveOrganization) return;
+            throw new APIError("FORBIDDEN", {
+              code: "ORGANIZATION_TENANT_MISMATCH",
+              message: "Only this tenant's organization can be active here; pass keepCurrentActiveOrganization: true",
+            });
+          }),
+        },
+        {
           matcher: (ctx) => ctx.path === "/organization/set-active",
           handler: createAuthMiddleware(async (ctx) => {
             const expected = getTenantFromContext(ctx.context)?.organizationId;
