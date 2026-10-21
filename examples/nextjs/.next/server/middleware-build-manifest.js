@@ -1,0 +1,54 @@
+globalThis.__BUILD_MANIFEST = {
+  "pages": {
+    "/_app": []
+  },
+  "devFiles": [],
+  "polyfillFiles": [
+    "static/chunks/0cz1d0mv5g_q7.js"
+  ],
+  "lowPriorityFiles": [
+    "static/T-TPvdUYV-O_eYxmhEsSy/_buildManifest.js",
+    "static/T-TPvdUYV-O_eYxmhEsSy/_ssgManifest.js",
+    "static/T-TPvdUYV-O_eYxmhEsSy/_clientMiddlewareManifest.js"
+  ],
+  "rootMainFiles": [
+    "static/chunks/0cewlzhn1u2hv.js",
+    "static/chunks/256obfye0uftd.js",
+    "static/chunks/23qe5vd4xpy1k.js",
+    "static/chunks/turbopack-3-ry682tkyiqk.js"
+  ],
+  "rootMainFilesTree": {},
+  "pagesChunkGroupBootstrapParams": {
+    "/page": {
+      "otherChunks": [
+        "static/chunks/0cewlzhn1u2hv.js",
+        "static/chunks/256obfye0uftd.js",
+        "static/chunks/23qe5vd4xpy1k.js"
+      ],
+      "runtimeModuleIds": [
+        52542
+      ]
+    },
+    "/_not-found/page": {
+      "otherChunks": [
+        "static/chunks/0cewlzhn1u2hv.js",
+        "static/chunks/256obfye0uftd.js",
+        "static/chunks/23qe5vd4xpy1k.js"
+      ],
+      "runtimeModuleIds": [
+        52542
+      ]
+    },
+    "/_global-error/page": {
+      "otherChunks": [
+        "static/chunks/0cewlzhn1u2hv.js",
+        "static/chunks/256obfye0uftd.js",
+        "static/chunks/23qe5vd4xpy1k.js"
+      ],
+      "runtimeModuleIds": [
+        52542
+      ]
+    }
+  },
+  "chunkLoadingGlobal": "TURBOPACK"
+};

@@ -1,0 +1,3 @@
+module.exports=[[77120,a=>{var b=a.i(11325);a.s(["default",0,function({children:a}){return(0,b.jsx)("html",{lang:"en",children:(0,b.jsx)("body",{style:{fontFamily:"system-ui, sans-serif",maxWidth:720,margin:"48px auto",padding:"0 16px",lineHeight:1.5,color:"#17171c"},children:a})})},"metadata",0,{title:"better-auth-multi-tenant · Next.js example"}])},56870,(a,b,c)=>{b.exports=a.r(18622)},11325,(a,b,c)=>{b.exports=a.r(56870).vendored["react-rsc"].ReactJsxRuntime}],18622,(a,b,c)=>{b.exports=a.x("next/dist/compiled/next-server/app-page-turbo.runtime.prod.js",()=>require("next/dist/compiled/next-server/app-page-turbo.runtime.prod.js"))},33787,function(a){a.n(a.i(77120))}];
+
+//# sourceMappingURL=%5Broot-of-the-server%5D__1zwxshz-u1gp4._.js.map

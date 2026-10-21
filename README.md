@@ -179,6 +179,35 @@ cross-tenant check still refuses that session on the wrong tenant, but signing
 in to one tenant then signs the user out of every other one. The plugin logs a
 warning at startup if it finds the option enabled.
 
+## Security notes
+
+What the plugin enforces on a tenant's host:
+
+- A session from another tenant is refused (`403 CROSS_TENANT_SESSION`) whether
+  it arrives as a cookie or as a bearer token from Better Auth's `bearer`
+  plugin.
+- With `getOrganizationId`, no session write can make another organization
+  active: `set-active`, `organization/create` (unless
+  `keepCurrentActiveOrganization: true`), accepting an invitation and so on.
+  Clearing the active organization is allowed, since it only removes access.
+
+What it does **not** do, so you can plan for it:
+
+- **Users are global.** Better Auth has one user table, so an account created
+  on `acme` can also sign in on `globex` and gets a `globex` session there.
+  Sign-up on another tenant with the same email answers
+  `422 USER_ALREADY_EXISTS`, which reveals that the email is registered
+  somewhere. If accounts must belong to a tenant, check membership in your own
+  code, or use the `organization` plugin's membership with
+  `getOrganizationId`.
+- **Suspended and unknown tenants look different**: `403 TENANT_INACTIVE`
+  versus `404 TENANT_NOT_FOUND`. If that must not be visible, return `null`
+  from `getTenant` for inactive tenants.
+- **Your own queries are not filtered.** Scope every data query by tenant
+  yourself.
+
+Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
+
 ## Options
 
 | Option | Default | Description |
