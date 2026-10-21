@@ -167,6 +167,19 @@ export const multiTenant = (options: MultiTenantOptions) => {
   return {
     id: "multi-tenant",
 
+    init(ctx) {
+      // One apex-domain cookie for every tenant: the cross-tenant check still
+      // refuses it on the wrong tenant, but signing in to one tenant signs the
+      // user out of the others.
+      if (ctx.options.advanced?.crossSubDomainCookies?.enabled) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] advanced.crossSubDomainCookies is enabled, so every tenant subdomain shares one session cookie. " +
+            "Users can only be signed in to one tenant at a time, and other tenants answer 403 CROSS_TENANT_SESSION. " +
+            "Turn it off unless you deliberately want a single sign-in across tenants.",
+        );
+      }
+    },
+
     schema: {
       session: {
         fields: {
