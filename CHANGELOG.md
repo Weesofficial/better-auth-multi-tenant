@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Security
+
+- **`/list-sessions` leaked other tenants' session tokens.** It returns every
+  session of the user, raw tokens included, so a script on one tenant's host
+  could read the user's sessions on every other tenant and replay them there.
+  It now returns only the current tenant's sessions.
+- **`/revoke-session` could revoke another tenant's session.** It now answers
+  `403 CROSS_TENANT_SESSION` for a token bound to a different tenant.
+- **Organization endpoints accepted another tenant's organization.** With
+  `getOrganizationId`, endpoints such as `organization/update`,
+  `get-full-organization`, `list-members`, `invite-member` and `delete` took an
+  explicit `organizationId` or `organizationSlug` and acted on it, ignoring the
+  locked active organization. Every `/organization/*` endpoint now refuses an
+  id or slug other than the tenant's (including `null` and an unknown slug)
+  with `403 ORGANIZATION_TENANT_MISMATCH`, and `organization/list` returns only
+  the tenant's organization.
+
 ### Added
 
 - `canAccessTenant(user, tenant, { organizationId, adapter })`. Better Auth
@@ -52,6 +69,16 @@
   plugin loads it.
 - CI also runs the suite against the latest and the 1.6 releases of
   `better-auth` and `@better-auth/sso`.
+- `createTenantAuth` for database-per-tenant. It resolves the tenant from the
+  request host with the plugin's resolver and serves the request from a cached
+  Better Auth instance built by your `createAuth(tenant)` callback, with an
+  optional `maxSize` (least recently used eviction) and `onEvict` hook, plus
+  `getAuth(headers)` and `evict(tenantId?)`. Unknown or inactive tenants get
+  the plugin's 404 / 403 without creating an instance, and every instance keeps
+  the `multiTenant` plugin and session stamping, so a token copied across hosts
+  is still refused.
+- README: *Database per tenant*, including schema-per-tenant on Postgres with
+  `search_path`.
 
 ### Changed
 
@@ -63,6 +90,8 @@
   the host: like the other callback routes, they run before a session is bound.
 - Development dependencies moved to `better-auth` and `@better-auth/sso`
   `^1.7.12`. The `better-auth` peer range is still `>=1.6.0`.
+- Internal: the plugin's tenant resolution moved into a shared function that
+  `createTenantAuth` also uses. Behaviour is unchanged.
 
 ## 0.4.1
 

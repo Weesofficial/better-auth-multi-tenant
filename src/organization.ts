@@ -25,22 +25,22 @@ const INVITATION_PATHS = new Set(["accept-invitation", "reject-invitation", "can
 const CHECK_SLUG = "/organization/check-slug";
 
 /**
- * With an organization bridge, the organization routes that are not about
- * teams only work on the tenant's organization on a tenant's host:
+ * With an organization bridge, every `/organization/*` route on a tenant's
+ * host only works on the tenant's organization:
  *
- * - an explicit `organizationId` or `organizationSlug` has to be the tenant's,
- *   and without one the session's active organization has to be;
+ * - an explicit `organizationId` or `organizationSlug` (body, `data` or query)
+ *   has to be the tenant's, so `null` (clearing it) and an unknown slug are
+ *   refused too; without one, the routes in `ORG_PATHS` use the session's
+ *   active organization, which has to be the tenant's;
  * - an invitation or member named by id has to belong to it, and so does a
  *   `teamId` on `invite-member`;
  * - `check-slug` is refused, since it tells whether any organization has a slug.
  *
- * An id that matches nothing is left to the route's own not-found error.
+ * An id that matches nothing is left to the route's own not-found error. Team
+ * routes add their own checks in `teamScopeHook`.
  */
 export const organizationScopeHook = {
-  matcher: (ctx: { path?: string }) => {
-    const path = ctx.path ?? "";
-    return ORG_PATHS.has(path) || INVITATION_PATHS.has(path) || path === CHECK_SLUG;
-  },
+  matcher: (ctx: { path?: string }) => ctx.path?.startsWith("/organization/") ?? false,
   handler: createAuthMiddleware(async (ctx) => {
     const expected = getTenantFromContext(ctx.context)?.organizationId;
     if (!expected) return;
@@ -58,20 +58,33 @@ export const organizationScopeHook = {
       if (owner && owner !== expected) throw organizationMismatch();
     };
 
+    let explicit = false;
+    for (const source of [body, body.data, query]) {
+      if (!source || typeof source !== "object") continue;
+      const { organizationId, organizationSlug } = source as { organizationId?: unknown; organizationSlug?: unknown };
+      let target = organizationId;
+      if (target === undefined && organizationSlug !== undefined) {
+        const org =
+          typeof organizationSlug === "string"
+            ? await adapter.findOne<{ id: string }>({ model: "organization", where: [{ field: "slug", value: organizationSlug }] })
+            : null;
+        // An unknown slug fails closed.
+        target = org?.id ?? null;
+      }
+      if (target === undefined) continue;
+      explicit = true;
+      if (target !== expected) throw organizationMismatch();
+    }
+
     if (INVITATION_PATHS.has(path)) {
       mustBeTenants(await ownerOf("invitation", "id", body.invitationId ?? query.id));
       return;
     }
+    if (!ORG_PATHS.has(path)) return;
 
-    const explicit = [body.organizationId, query.organizationId].filter(Boolean);
-    for (const id of explicit) if (id !== expected) throw organizationMismatch();
-    if (typeof query.organizationSlug === "string" && query.organizationSlug) {
-      explicit.push(query.organizationSlug);
-      mustBeTenants((await adapter.findOne<{ id: string }>({ model: "organization", where: [{ field: "slug", value: query.organizationSlug }] }))?.id ?? null);
-    }
     // Without an explicit organization the route uses the active one, which a
     // session that predates the bridge can have set to another.
-    if (!explicit.length) {
+    if (!explicit) {
       const active = (await getSessionFromCtx(ctx))?.session.activeOrganizationId;
       if (active && active !== expected) throw organizationMismatch();
     }

@@ -166,7 +166,11 @@ On a tenant's host:
   `activeOrganizationId`, stamped by `tenantSessionHooks()`;
 - `/organization/set-active` accepts only that organization, by id or by slug.
   Switching to any other organization, or clearing it, is
-  `403 ORGANIZATION_TENANT_MISMATCH`.
+  `403 ORGANIZATION_TENANT_MISMATCH`;
+- every other `/organization/*` endpoint refuses an `organizationId` or
+  `organizationSlug` (in the body or the query) that is not the tenant's, also
+  with `403 ORGANIZATION_TENANT_MISMATCH`. An unknown slug is refused too;
+- `/organization/list` returns only the tenant's organization.
 
 Membership checks stay with the `organization` plugin: the user still has to be
 a member of the tenant's organization.
@@ -348,6 +352,23 @@ through public hooks:
 `GET /sso/providers` lists only the tenant's providers (the same ownership rule
 as above). Without `getOrganizationId` or `getSSODomains` it is unfiltered.
 
+## Sessions across tenants
+
+One user can be signed in to several tenants, and Better Auth lists and revokes
+sessions per user. On a tenant's host:
+
+- `/list-sessions` returns only that tenant's sessions. Without this, a script
+  running on one tenant's host could read the session tokens of every other
+  tenant the user is signed in to.
+- `/revoke-session` refuses a token that belongs to another tenant
+  (`403 CROSS_TENANT_SESSION`).
+
+`/revoke-sessions`, `/revoke-other-sessions` and `revokeOtherSessions` on
+password change end only the tenant's sessions by default (`revokeScope`), so
+one tenant cannot sign the user out of the others. A password change therefore
+leaves the user's sessions on other tenants alive; set `revokeScope: "all"` for
+Better Auth's behaviour.
+
 ## Cookies across subdomains
 
 Leave Better Auth's `advanced.crossSubDomainCookies` **off**. It puts one
@@ -387,6 +408,9 @@ What the plugin enforces on a tenant's host:
   repository does not install, so its sessions are not verified here: if you use
   it with sessions enabled, test that a key from one tenant is refused on
   another.
+- `/list-sessions` returns only the tenant's sessions, so no other tenant's
+  session token leaves its host, and `/revoke-session` refuses a token bound to
+  another tenant (`403 CROSS_TENANT_SESSION`).
 - `/revoke-sessions`, `/revoke-other-sessions` and `/change-password` with
   `revokeOtherSessions` only end the tenant's sessions
   (and any with no tenant), see `revokeScope`. Password reset
@@ -418,6 +442,88 @@ What it does **not** do, so you can plan for it:
 
 Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 
+## Database per tenant
+
+The plugin above is single-database multi-tenancy: shared tables, with a
+`tenantId` on each session. If every tenant should have its own database,
+Better Auth cannot switch databases per request (one instance binds one
+database), so `createTenantAuth` keeps one instance per tenant:
+
+```ts
+import { createTenantAuth } from "better-auth-multi-tenant";
+
+export const tenantAuth = createTenantAuth({
+  baseDomain: "example.com",
+  getTenant: (slug) => registry.tenant.findUnique({ where: { slug } }),
+  // Called once per tenant while its instance stays cached.
+  createAuth: (tenant) => ({
+    secret: process.env.BETTER_AUTH_SECRET,
+    database: new Pool({ connectionString: urlFor(tenant) }),
+    emailAndPassword: { enabled: true },
+    trustedOrigins: ["https://*.example.com"],
+  }),
+  maxSize: 100,
+  onEvict: (_tenant, auth) => auth.$context.then((ctx) => closeDatabase(ctx.options.database)),
+});
+
+// Mount it where you would mount `auth.handler`, e.g. in Next.js:
+export const GET = tenantAuth.handler;
+export const POST = tenantAuth.handler;
+
+// In your own server code:
+const auth = await tenantAuth.getAuth(await headers());
+const session = await auth.api.getSession({ headers: await headers() });
+```
+
+The tenant is resolved from the request host with the same resolver as the
+plugin, and every option of [Options](#options) except `requireTenant` applies
+(including `getTenantByDomain` and `getOrganizationId`). An unknown tenant is
+`404 TENANT_NOT_FOUND`, an inactive one `403 TENANT_INACTIVE`, and a host that
+names no tenant `400 TENANT_REQUIRED`; none of them creates an instance or
+opens a database. Auth routes need a tenant on every path, because there is no
+database to fall back to.
+
+- **Isolation comes from the database.** A user or session created for one
+  tenant does not exist in another tenant's database.
+- **Sessions are still stamped.** Each instance has the `multiTenant` plugin
+  and `tenantSessionHooks()` installed for you, so a session or token that is
+  copied to another tenant's host is still refused with `CROSS_TENANT_SESSION`.
+  Do not add them to `createAuth` yourself.
+- **Caching.** Instances are keyed by tenant id and reused. With `maxSize`, the
+  least recently used one is evicted when the cache is full and `onEvict` runs
+  so you can close its connections. Requests still running on an evicted
+  instance are not waited for, so size the cache above your concurrent tenants.
+  `tenantAuth.evict(tenantId)` drops one instance (after a tenant's database
+  moved) and `tenantAuth.evict()` drops all of them, e.g. on shutdown.
+- **`createAuth` options are fixed at creation.** Changing a tenant's database
+  needs an `evict`. The tenant's status and slug are re-read on every request.
+- **Migrate every tenant database.** Better Auth's schema (plus
+  `session.tenantId`) must exist in each one; run your migrations when you
+  create a tenant.
+
+### Schema per tenant (Postgres)
+
+A schema per tenant uses the same helper: one database, a `search_path` per
+instance. With `pg`, set it as a connection startup option:
+
+```ts
+createAuth: (tenant) => ({
+  database: new Pool({
+    connectionString: process.env.DATABASE_URL,
+    options: `-c search_path=${schemaFor(tenant)}`,
+  }),
+  // ...
+}),
+```
+
+`schemaFor` must return an identifier you built and validated yourself (for
+example `tenant_${tenant.id}` after checking `/^[a-z0-9_]+$/`), never a raw
+request value. Create the schema and run the migrations inside it for each
+tenant. Each cached instance holds its own pool, so keep `maxSize` and the pool
+`max` within your connection limit. Poolers in transaction mode (PgBouncer)
+often ignore startup options; use `SET search_path` per connection instead, or
+a database per tenant.
+
 ## Options
 
 | Option | Default | Description |
@@ -425,7 +531,7 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `baseDomain` | — | Apex domain tenants live under, e.g. `example.com`. |
 | `getTenant` | — | `(slug) => Tenant \| null`. `null` becomes a 404. |
 | `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
-| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts, scopes teams and `activeTeamId` to it, and ties SSO providers to it. See [With the `organization` plugin](#with-the-organization-plugin). |
+| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts, refuses other organizations' ids and slugs on every `/organization/*` endpoint, scopes teams and `activeTeamId` to it, and ties SSO providers to it. See [With the `organization` plugin](#with-the-organization-plugin). |
 | `getSSODomains` | — | `(tenant) => string[]`. Email domains a tenant owns, for SSO providers with no organization. Turns on the SSO checks. See [With `@better-auth/sso`](#with-better-authsso). |
 | `canAccessTenant` | — | `(user, tenant, { organizationId, adapter }) => boolean`. Refuses sessions for users the tenant does not let in (`TENANT_ACCESS_DENIED`). `organizationMembersOnly` is a ready one. See [Who may sign in to a tenant](#who-may-sign-in-to-a-tenant). |
 | `ssoRequireTenantMapping` | `false` | With SSO installed and neither `getOrganizationId` nor `getSSODomains` set, `true` refuses every SSO route on tenant hosts instead of leaving SSO unscoped. |
@@ -443,14 +549,22 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
 | `onTenantResolved` | — | Called after each successful resolution. |
 
+Additional options of `createTenantAuth` (it also takes every option above except `requireTenant`). See [Database per tenant](#database-per-tenant).
+
+| Option | Default | Description |
+| --- | --- | --- |
+| `createAuth` | — | `(tenant) => BetterAuthOptions`. Builds a tenant's instance, with its own `database`. |
+| `maxSize` | unbounded | Most instances cached; the least recently used is evicted beyond it. A positive integer. |
+| `onEvict` | — | `(tenant, auth) => void`. Called when an instance leaves the cache; close its connections here. |
+
 ## Error codes
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| `TENANT_REQUIRED` | 400 | The path needs a tenant and the host did not name one. |
-| `TENANT_NOT_FOUND` | 404 | `getTenant` (or `getTenantByDomain`) returned `null`. |
+| `TENANT_REQUIRED` | 400 | The path needs a tenant and the host did not name one. Always, with `createTenantAuth`. |
+| `TENANT_NOT_FOUND` | 404 | `getTenant` (or `getTenantByDomain`) returned `null`. Same for `createTenantAuth`, before any instance is created. |
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
-| `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant. |
+| `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant, or `/revoke-session` named another tenant's session. |
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
 | `TENANT_ACCESS_DENIED` | 403 | `canAccessTenant` did not let the user in; no session was created. |
 | `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or an organization, team, invitation or member route named another organization's (see `getOrganizationId`). |

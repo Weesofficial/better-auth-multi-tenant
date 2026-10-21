@@ -43,8 +43,9 @@ const TEAM_PATHS = new Set([
 /**
  * With an organization bridge, a team route on a tenant's host only works on
  * that tenant's organization and its teams. Routes default to the session's
- * active organization, so an explicit one has to match, and so does a team id
- * (`list-team-members` looks a team up by id alone).
+ * active organization, which has to match, and so does a team id
+ * (`list-team-members` looks a team up by id alone). An explicit organization
+ * is checked by `organizationScopeHook`, which covers every `/organization/*` route.
  */
 export const teamScopeHook = {
   matcher: (ctx: { path?: string }) => TEAM_PATHS.has(ctx.path ?? ""),
@@ -52,13 +53,8 @@ export const teamScopeHook = {
     const expected = getTenantFromContext(ctx.context)?.organizationId;
     if (!expected) return;
 
-    const body = (ctx.body ?? {}) as { organizationId?: unknown; teamId?: unknown; data?: { organizationId?: unknown } };
-    const query = (ctx.query ?? {}) as { organizationId?: unknown; teamId?: unknown };
-
-    // An empty value means "the active organization", checked below.
-    for (const id of [body.organizationId, body.data?.organizationId, query.organizationId]) {
-      if (id && id !== expected) throw organizationMismatch();
-    }
+    const body = (ctx.body ?? {}) as { teamId?: unknown };
+    const query = (ctx.query ?? {}) as { teamId?: unknown };
 
     // A session that predates the bridge can still have another organization active.
     const active = (await getSessionFromCtx(ctx))?.session.activeOrganizationId;
