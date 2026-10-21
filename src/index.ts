@@ -1,12 +1,7 @@
 import { APIError, createAuthEndpoint, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import type { BetterAuthPlugin } from "better-auth";
-import {
-  normalizeHost,
-  resolveTenantSlug,
-  tenantOrigin,
-  type ResolverOptions,
-  type TenantRejection,
-} from "./resolver.js";
+import { tenantOrigin, type ResolverOptions } from "./resolver.js";
+import { resolveTenant } from "./tenant.js";
 
 export {
   resolveTenantSlug,
@@ -27,6 +22,8 @@ import {
 
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
+export { createTenantAuth } from "./tenant-auth.js";
+export type { TenantAuth, TenantAuthOptions } from "./tenant-auth.js";
 export { tenantSessionHooks } from "./session-hooks.js";
 export type { TenantSessionHookOptions } from "./session-hooks.js";
 
@@ -136,26 +133,6 @@ async function findBearerSession(ctx: {
   return token ? ctx.context.internalAdapter.findSession(token) : null;
 }
 
-/** Refuse unknown tenants (404, without saying why) and inactive ones (403). */
-function assertActive(tenant: Tenant | null): Tenant {
-  if (!tenant) {
-    throw new APIError("NOT_FOUND", { code: "TENANT_NOT_FOUND", message: "Unknown tenant" });
-  }
-  if (tenant.status !== undefined && tenant.status !== "active") {
-    throw new APIError("FORBIDDEN", { code: "TENANT_INACTIVE", message: "This tenant is not active" });
-  }
-  return tenant;
-}
-
-const REJECTION_STATUS: Record<TenantRejection, "BAD_REQUEST" | "NOT_FOUND"> = {
-  "no-host": "BAD_REQUEST",
-  "not-under-base-domain": "BAD_REQUEST",
-  "apex-domain": "BAD_REQUEST",
-  "nested-subdomain": "BAD_REQUEST",
-  "reserved-subdomain": "NOT_FOUND",
-  "malformed-slug": "BAD_REQUEST",
-};
-
 /**
  * Subdomain-based multi-tenancy for Better Auth.
  *
@@ -193,8 +170,6 @@ export const multiTenant = (options: MultiTenantOptions) => {
     onTenantResolved,
     ...resolverOptions
   } = options;
-
-  const headerName = options.headerName ?? "x-tenant";
 
   return {
     id: "multi-tenant",
@@ -278,31 +253,12 @@ export const multiTenant = (options: MultiTenantOptions) => {
           matcher: () => true,
           handler: createAuthMiddleware(async (ctx) => {
             const path = ctx.path ?? "";
-            const host = ctx.headers?.get("host");
-            const headerValue = resolverOptions.allowHeaderOverride
-              ? ctx.headers?.get(headerName)
-              : null;
-
-            const resolution = resolveTenantSlug(host, resolverOptions, headerValue);
-
-            let resolved: ResolvedTenant;
-            if (resolution.ok) {
-              const tenant = assertActive(await getTenant(resolution.slug));
-              resolved = { slug: resolution.slug, tenant, source: resolution.source };
-            } else if (resolution.reason === "not-under-base-domain" && getTenantByDomain) {
-              // A host outside the base domain can still be a tenant's own domain.
-              const domain = normalizeHost(host);
-              const found = await getTenantByDomain(domain);
-              if (!found && !requireTenant(path)) return;
-              const tenant = assertActive(found);
-              resolved = { slug: tenant.slug, tenant, source: "custom-domain", domain };
-            } else {
-              if (!requireTenant(path)) return;
-              throw new APIError(REJECTION_STATUS[resolution.reason], {
-                code: "TENANT_REQUIRED",
-                message: `No tenant for this request (${resolution.reason})`,
-              });
-            }
+            const resolved = await resolveTenant(
+              { ...resolverOptions, getTenant, getTenantByDomain },
+              ctx.headers,
+              !requireTenant(path),
+            );
+            if (!resolved) return;
 
             const organizationId = getOrganizationId?.(resolved.tenant);
             if (organizationId) resolved.organizationId = organizationId;
