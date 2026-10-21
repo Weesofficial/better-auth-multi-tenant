@@ -21,6 +21,7 @@ import {
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
+import { foreignSessionHook } from "./foreign-session.js";
 import { revokeScopeHook } from "./revoke.js";
 import { resolveScoping } from "./scoping.js";
 import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
@@ -490,6 +491,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
             }
           }),
         },
+        foreignSessionHook(getSessionTenantId, enforceSessionTenant),
         ...(bindVerifications ? [trustDeviceHook] : []),
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [organizationScopeHook] : []),
