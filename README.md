@@ -61,11 +61,15 @@ const { data } = await authClient.multiTenant.current();
 // { id: "t_123", slug: "acme", origin: "https://acme.example.com" }
 ```
 
-Add the session column:
+Add the `session.tenantId` and `verification.tenantId` columns:
 
 ```bash
 npx @better-auth/cli migrate
 ```
+
+`verification.tenantId` binds codes and tokens to a tenant, see
+[Authentication plugins](#authentication-plugins); pass
+`bindVerifications: false` if you do not want that column.
 
 ## What it does
 
@@ -373,6 +377,25 @@ one tenant cannot sign the user out of the others. A password change therefore
 leaves the user's sessions on other tenants alive; set `revokeScope: "all"` for
 Better Auth's behaviour.
 
+## Authentication plugins
+
+Better Auth's `twoFactor`, `username`, `anonymous`, `phoneNumber`, `magicLink`,
+`emailOTP`, `passkey` (`@better-auth/passkey`), `genericOAuth`, `oneTap` and
+`siwe` plugins all work with this plugin, each with end-to-end tests. Their
+sessions are stamped with the tenant, refused on another and gated by
+`canAccessTenant`. In addition, anything a plugin hands out as a verification row
+(magic-link token, email and phone OTP, two-factor challenge and trusted-device
+record, passkey challenge, SIWE nonce, OAuth state) is bound to the tenant that
+issued it: redeeming it on another tenant's host is refused with
+`403 VERIFICATION_TENANT_MISMATCH` (`bindVerifications`, on by default). A link
+that is emailed (magic link, OAuth callback) must open on the tenant that sent
+it, so use a `baseURL` that follows the request host.
+
+[docs/auth-plugins.md](./docs/auth-plugins.md) has the compatibility table, the
+answers per plugin, and how to configure a relying party, SIWE domain, Google
+client id or OAuth redirect per tenant. Gaps that only Better Auth can close are
+written up in [docs/upstream-proposals.md](./docs/upstream-proposals.md).
+
 ## Cookies across subdomains
 
 Leave Better Auth's `advanced.crossSubDomainCookies` **off**. It puts one
@@ -404,14 +427,22 @@ What the plugin enforces on a tenant's host:
   ([Who may sign in to a tenant](#who-may-sign-in-to-a-tenant)).
 - Every session created on a tenant's host through Better Auth's internal
   adapter gets the tenant stamp from `tenantSessionHooks()`, whichever plugin
-  creates it; this repository tests password, magic-link and anonymous
-  sessions. One created on a request with no tenant is refused
+  creates it; this repository tests password, username, phone, magic-link,
+  email OTP, two-factor, anonymous, passkey, generic OAuth, One Tap and SIWE
+  sessions ([Authentication plugins](#authentication-plugins)). One created on a
+  request with no tenant is refused
   (`400 TENANT_REQUIRED`) and one without a stamp is refused on use
   (`403 UNBOUND_SESSION`), so a plugin that skips the adapter gets no working
   session either. `@better-auth/api-key` is a separate package that this
   repository does not install, so its sessions are not verified here: if you use
   it with sessions enabled, test that a key from one tenant is refused on
   another.
+- With `bindVerifications` (default), a magic-link token, OTP, two-factor
+  challenge, trusted-device cookie, passkey challenge, SIWE nonce or OAuth state
+  issued on one tenant is refused on another
+  (`403 VERIFICATION_TENANT_MISMATCH`), and a session cookie of another tenant is
+  ignored on the sign-in, sign-up and callback routes (the anonymous plugin
+  would otherwise link and delete its anonymous user).
 - `/list-sessions` returns only the tenant's sessions, so no other tenant's
   session token leaves its host, and `/revoke-session` refuses a token bound to
   another tenant (`403 CROSS_TENANT_SESSION`).
@@ -438,6 +469,23 @@ What it does **not** do, so you can plan for it:
   internal adapter that only lists the tenant's sessions, through the return
   value of a `before` hook; this needs a Better Auth that merges a hook's
   returned `context`, which 1.7 does and which is untested on 1.6.
+- **Some plugin state is still shared across tenants**, because it lives in
+  Better Auth's own tables or identifiers
+  ([details](./docs/auth-plugins.md#per-plugin-notes)):
+  usernames and phone numbers are unique across all tenants (so a name taken on
+  one is visible as taken on all); the email and phone OTP slot is one per
+  address, so a code requested on another tenant replaces the pending one;
+  `check-verification-otp` can be probed from any tenant; two-factor settings
+  and passkeys belong to the user. Account creation is not gated by
+  `canAccessTenant`, only session creation.
+- **Verification binding is not enforced** when verification rows live only in
+  `secondaryStorage` (Better Auth runs no database hooks there; the plugin logs a
+  warning, set `verification.storeInDatabase: true`) or when a plugin verifies a
+  code outside the table (`phoneNumber`'s custom `verifyOTP`).
+- **One passkey relying party, SIWE domain, Google client id and OAuth redirect
+  per instance.** To vary them per tenant use `createTenantAuth` with the plugin
+  configured in `createAuth` (see
+  [docs/auth-plugins.md](./docs/auth-plugins.md)).
 - **Suspended and unknown tenants look different**: `403 TENANT_INACTIVE`
   versus `404 TENANT_NOT_FOUND`. If that must not be visible, return `null`
   from `getTenant` for inactive tenants.
@@ -502,8 +550,11 @@ database to fall back to.
 - **`createAuth` options are fixed at creation.** Changing a tenant's database
   needs an `evict`. The tenant's status and slug are re-read on every request.
 - **Migrate every tenant database.** Better Auth's schema (plus
-  `session.tenantId`) must exist in each one; run your migrations when you
-  create a tenant.
+  `session.tenantId`, and `verification.tenantId` unless you pass
+  `bindVerifications: false`) must exist in each one; run your migrations when
+  you create a tenant. With a database per tenant the verification binding adds
+  nothing, since a code issued in one tenant's database does not exist in
+  another's; it only matters when instances share a database.
 
 ### Schema per tenant (Postgres)
 
@@ -541,6 +592,7 @@ a database per tenant.
 | `teams` | `true` with `getOrganizationId`, else `false` | Scope the organization plugin's team routes, `list-user-teams` and `activeTeamId` to the tenant's organization. `false` turns it off; `true` without `getOrganizationId` throws at startup. See [Teams](#teams). |
 | `sso` | `true` with `getOrganizationId` or `getSSODomains`, else `false` | Scope `@better-auth/sso` to the tenant's providers. `false` turns it off (no checks, no startup warning); `true` without either option throws at startup, and so does `false` with `ssoRequireTenantMapping`. |
 | `ssoRequireTenantMapping` | `false` | With SSO installed and neither `getOrganizationId` nor `getSSODomains` set, `true` refuses every SSO route on tenant hosts instead of leaving SSO unscoped. |
+| `bindVerifications` | `true` | Stamp the codes, tokens, nonces and challenges that plugins keep as verification rows with the tenant that issued them (`verification.tenantId`), and refuse redeeming or deleting a live one on another tenant (`VERIFICATION_TENANT_MISMATCH`). Also drops another tenant's trusted-device cookie before sign-in. Needs the column; `false` turns it all off. See [Authentication plugins](#authentication-plugins). |
 | `revokeScope` | `"tenant"` | `"tenant"` limits `/revoke-sessions`, `/revoke-other-sessions` and `/change-password` with `revokeOtherSessions` to the tenant's sessions; `"all"` ends every session of the user, as Better Auth does. |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
 | `slugPattern` | DNS label, lowercase | Shape a slug must match. |
@@ -575,6 +627,7 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | `TENANT_ACCESS_DENIED` | 403 | `canAccessTenant` did not let the user in; no session was created. |
 | `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or an organization, team, invitation or member route named another organization's (see `getOrganizationId`). |
 | `TEAM_TENANT_MISMATCH` | 403 | A team route or `activeTeamId` named a team of another tenant's organization. |
+| `VERIFICATION_TENANT_MISMATCH` | 403 | A code, token, nonce, challenge or pending cookie was issued on a different tenant, or carries no tenant stamp (see `bindVerifications`). |
 | `SSO_PROVIDER_TENANT_MISMATCH` | 403 | An SSO sign-in, registration, callback, SAML response or provider route reached a provider that does not belong to the tenant, or a SAML RelayState that was not handed out on this tenant (see `getSSODomains`, `ssoRequireTenantMapping`). |
 
 ## Reading the tenant in your own code

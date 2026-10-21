@@ -19,8 +19,37 @@
   with `403 ORGANIZATION_TENANT_MISMATCH`, and `organization/list` returns only
   the tenant's organization.
 
+- **Codes, tokens and challenges issued on one tenant could be redeemed on
+  another.** Magic-link tokens, email and phone OTPs, two-factor challenges
+  (TOTP, OTP, backup codes), passkey challenges, SIWE nonces and OAuth state
+  are verification rows keyed by the address or a random id, with no tenant, so
+  the host that redeemed them decided the tenant of the session. They are now
+  stamped with the tenant of the request that wrote them and refused on another
+  tenant's host with `403 VERIFICATION_TENANT_MISMATCH` (`bindVerifications`).
+  An OAuth state started on one tenant could be finished on another by replaying
+  its state cookie.
+- **A trusted-device cookie from one tenant skipped two-factor on another.** It
+  is dropped before sign-in when its record belongs to another tenant, so the
+  sign-in meets the normal challenge. (Refusing in an after hook is not enough:
+  Better Auth keeps the session cookie of the failed response.)
+- **An anonymous session of one tenant was linked to, and deleted by, a sign-in
+  on another.** The sign-in, sign-up and callback routes run without the
+  cross-tenant check and the anonymous plugin reads the session cookie there.
+  A session of another tenant is now ignored on those routes.
+
 ### Added
 
+- `bindVerifications` (default `true`) and the `verification.tenantId` column it
+  needs, `VERIFICATION_TENANT_MISMATCH`. A startup warning when verification rows
+  live only in `secondaryStorage`, where Better Auth runs no database hooks.
+- [docs/auth-plugins.md](./docs/auth-plugins.md): how `twoFactor`, `username`,
+  `anonymous`, `phoneNumber`, `magicLink`, `emailOTP`, `passkey`,
+  `genericOAuth`, `oneTap` and `siwe` behave with the plugin, a compatibility
+  table, and how to configure a relying party, SIWE domain, Google client id or
+  OAuth redirect per tenant. [docs/upstream-proposals.md](./docs/upstream-proposals.md)
+  lists what only Better Auth can fix. End-to-end tests for each, including
+  `createTenantAuth`, the organization bridge and teams; `@better-auth/passkey`
+  is a development dependency for them.
 - `canAccessTenant(user, tenant, { organizationId, adapter })`. Better Auth
   users are global; with this set, a session is only created on a tenant's host
   for a user it lets in, whichever plugin creates it, else
@@ -92,6 +121,13 @@
 
 ### Changed
 
+- **Migration:** `bindVerifications` adds a nullable `verification.tenantId`
+  column. Run your migration before deploying, or pass `bindVerifications: false`.
+  Verification rows written before the upgrade carry no stamp and are refused on
+  a tenant's host, so codes issued just before the deploy stop working.
+- **Behaviour change:** a magic link (or any other code) must be redeemed on the
+  tenant that issued it. With one fixed `baseURL` the link opens on that host, so
+  use a `baseURL` that follows the request host; see the README.
 - **Behaviour change:** with `revokeScope` at its default, bulk revocation no
   longer ends the user's sessions on other tenants. A password change with
   `revokeOtherSessions` therefore leaves them alive; set `revokeScope: "all"`
