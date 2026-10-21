@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **`/list-sessions` leaked other tenants' session tokens.** It returns every
+  session of the user, raw tokens included, so a script on one tenant's host
+  could read the user's sessions on every other tenant and replay them there.
+  It now returns only the current tenant's sessions.
+- **`/revoke-session` could revoke another tenant's session.** It now answers
+  `403 CROSS_TENANT_SESSION` for a token bound to a different tenant.
+- **Organization endpoints accepted another tenant's organization.** With
+  `getOrganizationId`, endpoints such as `organization/update`,
+  `get-full-organization`, `list-members`, `invite-member` and `delete` took an
+  explicit `organizationId` or `organizationSlug` and acted on it, ignoring the
+  locked active organization. Every `/organization/*` endpoint now refuses an
+  id or slug other than the tenant's with `403 ORGANIZATION_TENANT_MISMATCH`,
+  and `organization/list` returns only the tenant's organization.
+
 ## 0.4.1
 
 ### Security

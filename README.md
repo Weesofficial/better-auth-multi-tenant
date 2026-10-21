@@ -166,10 +166,29 @@ On a tenant's host:
   `activeOrganizationId`, stamped by `tenantSessionHooks()`;
 - `/organization/set-active` accepts only that organization, by id or by slug.
   Switching to any other organization, or clearing it, is
-  `403 ORGANIZATION_TENANT_MISMATCH`.
+  `403 ORGANIZATION_TENANT_MISMATCH`;
+- every other `/organization/*` endpoint refuses an `organizationId` or
+  `organizationSlug` (in the body or the query) that is not the tenant's, also
+  with `403 ORGANIZATION_TENANT_MISMATCH`. An unknown slug is refused too;
+- `/organization/list` returns only the tenant's organization.
 
 Membership checks stay with the `organization` plugin: the user still has to be
 a member of the tenant's organization.
+
+## Sessions across tenants
+
+One user can be signed in to several tenants, and Better Auth lists and revokes
+sessions per user. On a tenant's host:
+
+- `/list-sessions` returns only that tenant's sessions. Without this, a script
+  running on one tenant's host could read the session tokens of every other
+  tenant the user is signed in to.
+- `/revoke-session` refuses a token that belongs to another tenant
+  (`403 CROSS_TENANT_SESSION`).
+
+`/revoke-sessions`, `/revoke-other-sessions` and `revokeOtherSessions` on
+password change still act on all of the user's sessions, on every tenant: they
+only ever sign the user out, and the user is the same person everywhere.
 
 ## Cookies across subdomains
 
@@ -215,7 +234,7 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `baseDomain` | — | Apex domain tenants live under, e.g. `example.com`. |
 | `getTenant` | — | `(slug) => Tenant \| null`. `null` becomes a 404. |
 | `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
-| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts. See [With the `organization` plugin](#with-the-organization-plugin). |
+| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts and refuses other organizations' ids and slugs on every `/organization/*` endpoint. See [With the `organization` plugin](#with-the-organization-plugin). |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
 | `slugPattern` | DNS label, lowercase | Shape a slug must match. |
 | `allowNestedSubdomains` | `false` | Let `acme.eu.example.com` resolve to `acme`. |
@@ -236,9 +255,9 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `TENANT_REQUIRED` | 400 | The path needs a tenant and the host did not name one. |
 | `TENANT_NOT_FOUND` | 404 | `getTenant` (or `getTenantByDomain`) returned `null`. |
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
-| `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant. |
+| `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant, or `/revoke-session` named another tenant's session. |
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
-| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's (see `getOrganizationId`). |
+| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or another `/organization/*` endpoint named one by `organizationId` or `organizationSlug` (see `getOrganizationId`). |
 
 ## Reading the tenant in your own code
 
