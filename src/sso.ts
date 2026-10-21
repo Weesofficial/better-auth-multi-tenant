@@ -8,6 +8,11 @@ export interface ProviderRow {
   domain?: string | null;
 }
 
+/** Verification identifier prefix for "this RelayState was handed out on that tenant". */
+const RELAY_KEY = "multi-tenant:saml-relay:";
+/** The SSO plugin's own relay state lives 10 minutes. */
+const RELAY_TTL_MS = 600_000;
+
 const mismatch = () =>
   new APIError("FORBIDDEN", {
     code: "SSO_PROVIDER_TENANT_MISMATCH",
@@ -135,6 +140,20 @@ export function ssoGuardHooks(getSSODomains?: (tenant: Tenant) => string[] | nul
       }),
     },
     {
+      // A SAML response names the flow it answers by RelayState. Only a
+      // RelayState handed out on this tenant's host (see the after hook) gets
+      // through; without one the response is IdP-initiated, which the SSO
+      // plugin accepts only when `allowIdpInitiated` is on.
+      matcher: (ctx: { path?: string }) => (ctx.path ?? "").startsWith("/sso/saml2/sp/acs"),
+      handler: createAuthMiddleware(async (ctx) => {
+        const resolved = getTenantFromContext(ctx.context);
+        const relayState = (ctx.body as { RelayState?: unknown } | undefined)?.RelayState;
+        if (!resolved || typeof relayState !== "string" || !relayState) return;
+        const bound = await ctx.context.internalAdapter.findVerificationValue(`${RELAY_KEY}${relayState}`);
+        if (!bound || bound.value !== resolved.tenant.id || new Date(bound.expiresAt) <= new Date()) throw mismatch();
+      }),
+    },
+    {
       // The shared callback (the SSO plugin's `redirectURI` option) learns the
       // provider from the OAuth state, which only the plugin can read. It cannot
       // be checked here, so it is refused on a tenant's host.
@@ -146,6 +165,25 @@ export function ssoGuardHooks(getSSODomains?: (tenant: Tenant) => string[] | nul
   ];
 
   const after = [
+    {
+      // A SAML sign-in redirects to the IdP with the SSO plugin's RelayState
+      // (a standard parameter of the redirect binding). Remember which tenant
+      // it was handed out on, for the ACS check above.
+      matcher: (ctx: { path?: string }) => ctx.path === "/sign-in/sso",
+      handler: createAuthMiddleware(async (ctx) => {
+        const resolved = getTenantFromContext(ctx.context);
+        const url = (ctx.context.returned as { url?: unknown } | undefined)?.url;
+        if (!resolved || typeof url !== "string") return;
+        const params = new URL(url).searchParams;
+        const relayState = params.get("RelayState");
+        if (!relayState || !params.has("SAMLRequest")) return;
+        await ctx.context.internalAdapter.createVerificationValue({
+          identifier: `${RELAY_KEY}${relayState}`,
+          value: resolved.tenant.id,
+          expiresAt: new Date(Date.now() + RELAY_TTL_MS),
+        });
+      }),
+    },
     {
       // The list covers every organization the user administers, whatever the
       // tenant of the host; keep the tenant's providers.

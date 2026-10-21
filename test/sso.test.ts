@@ -304,6 +304,70 @@ test("the shared callback cannot be checked, so a tenant's host refuses it", asy
   await refused(await ctx.request("acme.example.com", "/sso/callback?code=abc&state=x"));
 });
 
+const samlConfig = JSON.stringify({
+  issuer: "http://acme.example.com/sp",
+  entryPoint: `${IDP}/saml/sso`,
+  cert: "-----BEGIN CERTIFICATE-----\nMIIBszCCAVmgAwIBAgIUQmFkIGNlcnQgZm9yIHRlc3RzIG9ubHkwCgYIKoZIzj0E\nAwIwFjEUMBIGA1UEAwwLaWRwLmV4YW1wbGUwHhcNMjUwMTAxMDAwMDAwWhcNMzUw\n-----END CERTIFICATE-----",
+  callbackUrl: "/",
+  idpMetadata: { entityID: IDP },
+  spMetadata: {},
+});
+
+/**
+ * Two tenants that both list `shared.io` as theirs, so the provider check
+ * alone cannot tell which of them a SAML flow belongs to.
+ */
+function samlSetup(overrides: Partial<MultiTenantOptions> = {}) {
+  const ctx = ssoSetup({ getSSODomains: () => ["shared.io"], ...overrides });
+  ctx.db.ssoProvider!.push(provider("shared-saml", { domain: "shared.io", oidcConfig: null, samlConfig }));
+  /** Start a SAML flow on `host`; returns the RelayState the IdP will send back. */
+  const start = async (host: string) => {
+    const res = await ctx.signIn(host, { providerId: "shared-saml" });
+    assert.equal(res.status, 200, await res.clone().text());
+    const relayState = new URL(((await res.json()) as { url: string }).url).searchParams.get("RelayState");
+    assert.ok(relayState, "expected a RelayState in the IdP redirect");
+    return relayState;
+  };
+  const acs = (host: string, body: Record<string, unknown>) =>
+    ctx.request(host, "/sso/saml2/sp/acs/shared-saml", { method: "POST", body: { SAMLResponse: "AAAA", ...body } });
+  return { ...ctx, start, acs };
+}
+
+const isMismatch = async (res: Response) => res.status === 403 && (await res.clone().text()).includes("SSO_PROVIDER_TENANT_MISMATCH");
+
+test("a SAML response is bound to the tenant of the host that started the flow", async () => {
+  const { start, acs } = samlSetup();
+  const relayState = await start("acme.example.com");
+  assert.equal(await isMismatch(await acs("globex.example.com", { RelayState: relayState })), true);
+  // On the tenant that started it the plugin gets the response.
+  assert.equal(await isMismatch(await acs("acme.example.com", { RelayState: relayState })), false);
+});
+
+test("a form-encoded SAML response is bound to the host too", async () => {
+  const { start, auth } = samlSetup();
+  const relayState = await start("acme.example.com");
+  const post = (host: string) =>
+    auth.handler(
+      new Request(`http://${host}/api/auth/sso/saml2/sp/acs/shared-saml`, {
+        method: "POST",
+        headers: { host, origin: IDP, "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ SAMLResponse: "AAAA", RelayState: relayState }),
+      }),
+    );
+  assert.equal(await isMismatch(await post("globex.example.com")), true);
+  assert.equal(await isMismatch(await post("acme.example.com")), false);
+});
+
+test("a RelayState this plugin did not hand out is refused on a tenant's host", async () => {
+  const { acs } = samlSetup();
+  assert.equal(await isMismatch(await acs("acme.example.com", { RelayState: "forged" })), true);
+});
+
+test("an IdP-initiated response, with no RelayState, is left to the SSO plugin", async () => {
+  const { acs } = samlSetup();
+  assert.equal(await isMismatch(await acs("acme.example.com", {})), false);
+});
+
 const captureWarnings = () => {
   const warnings: string[] = [];
   const logger = {
