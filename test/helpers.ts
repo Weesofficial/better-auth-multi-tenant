@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { betterAuth, type BetterAuthOptions } from "better-auth";
+import { betterAuth, type BetterAuthOptions, type BetterAuthPlugin } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { multiTenant, tenantSessionHooks, type MultiTenantOptions, type Tenant } from "../src/index.js";
 
@@ -16,13 +16,17 @@ export function setup(
   {
     trustedOrigins = ["http://*.example.com"],
     auth: authOverrides = {},
-  }: { trustedOrigins?: string[]; auth?: Partial<BetterAuthOptions> } = {},
+    plugins = [],
+  }: { trustedOrigins?: string[]; auth?: Partial<BetterAuthOptions>; plugins?: BetterAuthPlugin[] } = {},
 ) {
   const db: { [model: string]: Record<string, unknown>[]; session: Record<string, unknown>[] } = {
     user: [],
     session: [],
     account: [],
     verification: [],
+    organization: [],
+    member: [],
+    invitation: [],
   };
   const auth = betterAuth({
     secret: "test-secret-0123456789-abcdefghijklmnop",
@@ -37,6 +41,7 @@ export function setup(
         getTenant: (slug) => TENANTS[slug] ?? null,
         ...overrides,
       }),
+      ...plugins,
     ],
     databaseHooks: tenantSessionHooks(),
     ...authOverrides,

@@ -55,7 +55,15 @@ export function tenantSessionHooks(options: TenantSessionHookOptions = {}) {
             });
           }
 
-          return { data: { ...session, tenantId: resolved.tenant.id } };
+          return {
+            data: {
+              ...session,
+              tenantId: resolved.tenant.id,
+              // Set only with an organization bridge, so apps without the
+              // organization plugin never see the column.
+              ...(resolved.organizationId ? { activeOrganizationId: resolved.organizationId } : {}),
+            },
+          };
         },
       },
     },

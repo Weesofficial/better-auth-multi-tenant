@@ -9,6 +9,8 @@ export interface ResolvedTenant {
   source: "host" | "header" | "custom-domain";
   /** The normalised host, set only when `source` is `"custom-domain"`. */
   domain?: string;
+  /** The tenant's organization, when `getOrganizationId` is configured. */
+  organizationId?: string;
 }
 
 /** The minimum a tenant record must expose for this plugin to gate on it. */

@@ -48,6 +48,14 @@ export interface MultiTenantOptions extends ResolverOptions {
    */
   getTenantByDomain?: (domain: string) => Promise<Tenant | null> | Tenant | null;
   /**
+   * Map a tenant to its organization in Better Auth's `organization` plugin.
+   * When set, new sessions start with that organization active (through
+   * `tenantSessionHooks()`), and on a tenant's host `/organization/set-active`
+   * refuses any other organization, including clearing it, with
+   * `403 ORGANIZATION_TENANT_MISMATCH`.
+   */
+  getOrganizationId?: (tenant: Tenant) => string | null | undefined;
+  /**
    * Decide whether a given request path must carry a tenant. Defaults to
    * requiring one everywhere, which is the safe default: a path that forgets to
    * opt in fails closed instead of silently serving cross-tenant data.
@@ -151,6 +159,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
   const {
     getTenant,
     getTenantByDomain,
+    getOrganizationId,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
@@ -208,6 +217,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
         code: "UNBOUND_SESSION",
         message: "This session is not bound to a tenant",
       },
+      ORGANIZATION_TENANT_MISMATCH: {
+        code: "ORGANIZATION_TENANT_MISMATCH",
+        message: "Only this tenant's organization can be active here",
+      },
     },
 
     hooks: {
@@ -243,6 +256,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
               });
             }
 
+            const organizationId = getOrganizationId?.(resolved.tenant);
+            if (organizationId) resolved.organizationId = organizationId;
+
             setTenantOnContext(ctx.context, resolved);
             await onTenantResolved?.(resolved, path);
           }),
@@ -273,6 +289,34 @@ export const multiTenant = (options: MultiTenantOptions) => {
               throw new APIError("FORBIDDEN", {
                 code: "CROSS_TENANT_SESSION",
                 message: "This session belongs to a different tenant",
+              });
+            }
+          }),
+        },
+        {
+          // With an organization bridge, a tenant's host only ever has that
+          // tenant's organization active.
+          matcher: (ctx) => ctx.path === "/organization/set-active",
+          handler: createAuthMiddleware(async (ctx) => {
+            const expected = getTenantFromContext(ctx.context)?.organizationId;
+            if (!expected) return;
+
+            const body = (ctx.body ?? {}) as { organizationId?: string | null; organizationSlug?: string };
+            let target: string | null | undefined = body.organizationId;
+            if (target === undefined && body.organizationSlug) {
+              const org = await ctx.context.adapter.findOne<{ id: string }>({
+                model: "organization",
+                where: [{ field: "slug", value: body.organizationSlug }],
+              });
+              target = org?.id;
+            }
+            // No target at all keeps the current (tenant-stamped) organization.
+            if (target === undefined && !body.organizationSlug) return;
+
+            if (target !== expected) {
+              throw new APIError("FORBIDDEN", {
+                code: "ORGANIZATION_TENANT_MISMATCH",
+                message: "Only this tenant's organization can be active here",
               });
             }
           }),
