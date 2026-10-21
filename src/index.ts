@@ -22,6 +22,7 @@ import {
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { revokeScopeHook } from "./revoke.js";
+import { resolveScoping } from "./scoping.js";
 import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
 import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
 
@@ -73,6 +74,21 @@ export interface MultiTenantOptions extends ResolverOptions {
    * tenant's providers, else `403 SSO_PROVIDER_TENANT_MISMATCH`.
    */
   getSSODomains?: (tenant: Tenant) => string[] | null | undefined | Promise<string[] | null | undefined>;
+  /**
+   * Scope the `organization` plugin's team routes, `list-user-teams` and
+   * `activeTeamId` to the tenant's organization. Defaults to `true` when
+   * `getOrganizationId` is set, else `false`. `false` leaves teams unscoped;
+   * `true` without `getOrganizationId` throws at startup.
+   */
+  teams?: boolean;
+  /**
+   * Scope `@better-auth/sso` to the tenant's providers. Defaults to `true` when
+   * `getOrganizationId` or `getSSODomains` is set, else `false`. `false` leaves
+   * SSO unscoped (no checks, no startup warning); `true` without either option
+   * throws at startup, and so does `false` together with
+   * `ssoRequireTenantMapping`.
+   */
+  sso?: boolean;
   /**
    * With `@better-auth/sso` installed and neither `getOrganizationId` nor
    * `getSSODomains` set, no provider is tied to a tenant, so any tenant's host
@@ -219,6 +235,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getTenantByDomain,
     getOrganizationId,
     getSSODomains,
+    teams: _teams,
+    sso: ssoOption,
     ssoRequireTenantMapping = false,
     canAccessTenant,
     requireTenant = () => true,
@@ -233,10 +251,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
     ...resolverOptions
   } = options;
 
-  const sso =
-    getOrganizationId || getSSODomains
-      ? ssoGuardHooks(getSSODomains)
-      : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
+  const { hasSSOMapping, teamsScoped, ssoScoped } = resolveScoping(options);
+  const sso = ssoScoped
+    ? ssoGuardHooks(getSSODomains)
+    : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
 
   return {
     id: "multi-tenant",
@@ -253,7 +271,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         );
       }
 
-      if (!getOrganizationId && !getSSODomains && ctx.options.plugins?.some((p) => p.id === "sso")) {
+      if (ssoOption !== false && !hasSSOMapping && ctx.options.plugins?.some((p) => p.id === "sso")) {
         ctx.logger.warn(
           ssoRequireTenantMapping
             ? "[better-auth-multi-tenant] @better-auth/sso is installed and ssoRequireTenantMapping is on, but neither getOrganizationId nor getSSODomains is set, " +
@@ -266,7 +284,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
       const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
       if (!getOrganizationId) return canAccessTenant ? { options: { databaseHooks: { session: accessHooks } } } : undefined;
       const orgPlugin = ctx.options.plugins?.find((p) => p.id === "organization");
-      const teamsEnabled = Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
+      const teamsEnabled =
+        teamsScoped && Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
         options: {
           databaseHooks: {
@@ -293,7 +312,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
                   // The active team must belong to the tenant's organization. This
                   // also covers accept-invitation, which sets the team first.
                   const team = data.activeTeamId;
-                  if (team) {
+                  if (teamsScoped && team) {
                     const adapter = hookCtx?.context?.adapter;
                     if (typeof team !== "string" || !adapter || (await teamOrganizationId(adapter, team)) !== expected) {
                       throw teamTenantMismatch();
@@ -448,7 +467,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
           }),
         },
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
-        ...(getOrganizationId ? [organizationScopeHook, teamScopeHook] : []),
+        ...(getOrganizationId ? [organizationScopeHook] : []),
+        ...(teamsScoped ? [teamScopeHook] : []),
         ...sso.before,
       ],
       after: [
@@ -472,7 +492,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
             return ctx.json(returned.filter((org: { id?: string }) => org.id === expected));
           }),
         },
-        ...(getOrganizationId ? [teamListHook, invitationListHook] : []),
+        ...(teamsScoped ? [teamListHook] : []),
+        ...(getOrganizationId ? [invitationListHook] : []),
         ...sso.after,
       ],
     },

@@ -65,6 +65,12 @@
   refused before any user or session is created. See the README for the limits:
   the shared `redirectURI` callback is refused on tenant hosts, and an
   IdP-initiated SAML response is only checked against the provider.
+- `teams` and `sso` options to turn team and SSO scoping on or off. Defaults keep
+  the current behaviour (teams on with `getOrganizationId`; SSO on with
+  `getOrganizationId` or `getSSODomains`); `false` turns that scoping off, and
+  `true` without the mapping it needs throws at startup, as does `sso: false`
+  with `ssoRequireTenantMapping: true`. `createTenantAuth` validates them when
+  it is called.
 - `@better-auth/sso` is an optional peer dependency (`>=1.6.0`). Nothing in the
   plugin loads it.
 - CI also runs the suite against the latest and the 1.6 releases of

@@ -243,7 +243,9 @@ too. Things to know:
 ### Teams
 
 With `organization({ teams: { enabled: true } })` and `getOrganizationId`, the
-team routes are scoped to the tenant's organization too. On a tenant's host:
+team routes are scoped to the tenant's organization too (the `teams` option,
+on by default with `getOrganizationId`; `teams: false` leaves teams unscoped
+while the other organization checks stay). On a tenant's host:
 
 - `create-team`, `update-team`, `remove-team`, `list-teams`, `list-user-teams`,
   `add-team-member` and `remove-team-member` refuse an explicit
@@ -278,7 +280,9 @@ multiTenant({
 });
 ```
 
-Setting either option turns the checks on. Without them SSO is untouched, so any
+Setting either option turns the checks on (the `sso` option; `sso: false` turns
+them off again even with a mapping, `sso: true` without a mapping throws at
+startup). Without them SSO is untouched, so any
 tenant's host can use any provider, and the plugin logs a warning at startup if
 `@better-auth/sso` is installed. To fail closed instead, set
 `ssoRequireTenantMapping: true`: with neither option set, every SSO route
@@ -534,6 +538,8 @@ a database per tenant.
 | `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts, refuses other organizations' ids and slugs on every `/organization/*` endpoint, scopes teams and `activeTeamId` to it, and ties SSO providers to it. See [With the `organization` plugin](#with-the-organization-plugin). |
 | `getSSODomains` | — | `(tenant) => string[]`. Email domains a tenant owns, for SSO providers with no organization. Turns on the SSO checks. See [With `@better-auth/sso`](#with-better-authsso). |
 | `canAccessTenant` | — | `(user, tenant, { organizationId, adapter }) => boolean`. Refuses sessions for users the tenant does not let in (`TENANT_ACCESS_DENIED`). `organizationMembersOnly` is a ready one. See [Who may sign in to a tenant](#who-may-sign-in-to-a-tenant). |
+| `teams` | `true` with `getOrganizationId`, else `false` | Scope the organization plugin's team routes, `list-user-teams` and `activeTeamId` to the tenant's organization. `false` turns it off; `true` without `getOrganizationId` throws at startup. See [Teams](#teams). |
+| `sso` | `true` with `getOrganizationId` or `getSSODomains`, else `false` | Scope `@better-auth/sso` to the tenant's providers. `false` turns it off (no checks, no startup warning); `true` without either option throws at startup, and so does `false` with `ssoRequireTenantMapping`. |
 | `ssoRequireTenantMapping` | `false` | With SSO installed and neither `getOrganizationId` nor `getSSODomains` set, `true` refuses every SSO route on tenant hosts instead of leaving SSO unscoped. |
 | `revokeScope` | `"tenant"` | `"tenant"` limits `/revoke-sessions`, `/revoke-other-sessions` and `/change-password` with `revokeOtherSessions` to the tenant's sessions; `"all"` ends every session of the user, as Better Auth does. |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
