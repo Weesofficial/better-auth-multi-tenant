@@ -364,29 +364,82 @@ export const multiTenant = (options: MultiTenantOptions) => {
           }),
         },
         {
-          matcher: (ctx) => ctx.path === "/organization/set-active",
+          // Most organization endpoints take an explicit organizationId or
+          // organizationSlug (body or query) that overrides the active one, so
+          // locking the active organization alone would still let a tenant's
+          // host read and change another tenant's organization.
+          matcher: (ctx) => ctx.path?.startsWith("/organization/") ?? false,
           handler: createAuthMiddleware(async (ctx) => {
             const expected = getTenantFromContext(ctx.context)?.organizationId;
             if (!expected) return;
 
-            const body = (ctx.body ?? {}) as { organizationId?: string | null; organizationSlug?: string };
-            let target: string | null | undefined = body.organizationId;
-            if (target === undefined && body.organizationSlug) {
-              const org = await ctx.context.adapter.findOne<{ id: string }>({
-                model: "organization",
-                where: [{ field: "slug", value: body.organizationSlug }],
-              });
-              target = org?.id;
-            }
-            // No target at all keeps the current (tenant-stamped) organization.
-            if (target === undefined && !body.organizationSlug) return;
+            for (const source of [ctx.body, ctx.query]) {
+              if (!source || typeof source !== "object") continue;
+              const { organizationId, organizationSlug } = source as {
+                organizationId?: string | null;
+                organizationSlug?: unknown;
+              };
+              let target = organizationId;
+              if (target === undefined && organizationSlug !== undefined) {
+                const org =
+                  typeof organizationSlug === "string"
+                    ? await ctx.context.adapter.findOne<{ id: string }>({
+                        model: "organization",
+                        where: [{ field: "slug", value: organizationSlug }],
+                      })
+                    : null;
+                // An unknown slug fails closed.
+                target = org?.id ?? null;
+              }
+              // No target at all keeps the current (tenant-stamped) organization.
+              if (target === undefined) continue;
 
-            if (target !== expected) {
+              if (target !== expected) {
+                throw new APIError("FORBIDDEN", {
+                  code: "ORGANIZATION_TENANT_MISMATCH",
+                  message: "Only this tenant's organization can be used here",
+                });
+              }
+            }
+          }),
+        },
+        {
+          // A user's sessions span tenants; revoking one from another tenant's
+          // host would let that host sign the user out elsewhere.
+          matcher: (ctx) => ctx.path === "/revoke-session",
+          handler: createAuthMiddleware(async (ctx) => {
+            const resolved = getTenantFromContext(ctx.context);
+            const token = (ctx.body as { token?: unknown } | undefined)?.token;
+            if (!resolved || typeof token !== "string") return;
+            const target = await ctx.context.internalAdapter.findSession(token);
+            if (target && getSessionTenantId(target) !== resolved.tenant.id) {
               throw new APIError("FORBIDDEN", {
-                code: "ORGANIZATION_TENANT_MISMATCH",
-                message: "Only this tenant's organization can be active here",
+                code: "CROSS_TENANT_SESSION",
+                message: "This session belongs to a different tenant",
               });
             }
+          }),
+        },
+      ],
+      after: [
+        {
+          // list-sessions returns every session of the user, tokens included.
+          // Only this tenant's may leave this tenant's host.
+          matcher: (ctx) => ctx.path === "/list-sessions",
+          handler: createAuthMiddleware(async (ctx) => {
+            const resolved = getTenantFromContext(ctx.context);
+            const returned = ctx.context.returned;
+            if (!resolved || !Array.isArray(returned)) return;
+            return ctx.json(returned.filter((session) => getSessionTenantId({ session }) === resolved.tenant.id));
+          }),
+        },
+        {
+          matcher: (ctx) => ctx.path === "/organization/list",
+          handler: createAuthMiddleware(async (ctx) => {
+            const expected = getTenantFromContext(ctx.context)?.organizationId;
+            const returned = ctx.context.returned;
+            if (!expected || !Array.isArray(returned)) return;
+            return ctx.json(returned.filter((org: { id?: string }) => org.id === expected));
           }),
         },
       ],
