@@ -25,6 +25,7 @@ import {
   type Tenant,
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
+import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { ssoGuardHooks } from "./sso.js";
 import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
 
@@ -460,10 +461,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
             }
           }),
         },
-        ...(getOrganizationId ? [teamScopeHook] : []),
+        ...(getOrganizationId ? [teamScopeHook, organizationScopeHook] : []),
         ...(getOrganizationId || getSSODomains ? ssoGuardHooks(getSSODomains) : []),
       ],
-      after: getOrganizationId ? [teamListHook] : [],
+      after: getOrganizationId ? [teamListHook, invitationListHook] : [],
     },
 
     endpoints: {

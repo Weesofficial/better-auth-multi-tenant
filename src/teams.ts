@@ -21,7 +21,7 @@ export const teamTenantMismatch = () =>
     message: "This team belongs to a different tenant's organization",
   });
 
-const organizationMismatch = () =>
+export const organizationMismatch = () =>
   new APIError("FORBIDDEN", {
     code: "ORGANIZATION_TENANT_MISMATCH",
     message: "Only this tenant's organization can be used here",
@@ -74,16 +74,19 @@ export const teamScopeHook = {
 };
 
 /**
- * `list-user-teams` returns the user's teams in every organization (older
- * versions take no organization at all), so keep only the tenant's.
+ * A route that lists rows across every organization of the user: keep only the
+ * tenant's. `list-user-teams` (older versions take no organization at all) and
+ * `list-user-invitations` work this way.
  */
-export const teamListHook = {
-  matcher: (ctx: { path?: string }) => ctx.path === "/organization/list-user-teams",
+export const listScopeHook = (path: string) => ({
+  matcher: (ctx: { path?: string }) => ctx.path === path,
   handler: createAuthMiddleware(async (ctx) => {
     const expected = getTenantFromContext(ctx.context)?.organizationId;
     const returned = ctx.context.returned;
     if (!expected || returned instanceof Error) return;
-    const teams = Array.isArray(returned) ? (returned as { organizationId?: string }[]) : [];
-    return ctx.json(teams.filter((team) => team.organizationId === expected));
+    const rows = Array.isArray(returned) ? (returned as { organizationId?: string }[]) : [];
+    return ctx.json(rows.filter((row) => row.organizationId === expected));
   }),
-};
+});
+
+export const teamListHook = listScopeHook("/organization/list-user-teams");
