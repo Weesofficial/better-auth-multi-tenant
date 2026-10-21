@@ -1,0 +1,33 @@
+name: Examples
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        example: [hono, express, nuxt, sveltekit, tanstack-start, cloudflare-workers]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Builds the package and packs it as npm would publish it.
+      - run: npm run pack:examples
+      - name: Install ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: npm install --no-package-lock --legacy-peer-deps
+      - name: Smoke test ${{ matrix.example }}
+        working-directory: examples/${{ matrix.example }}
+        run: npm run smoke
