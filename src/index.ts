@@ -24,6 +24,8 @@ import {
   type ResolvedTenant,
   type Tenant,
 } from "./context.js";
+import { ssoGuardHooks } from "./sso.js";
+import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
 
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
@@ -54,8 +56,21 @@ export interface MultiTenantOptions extends ResolverOptions {
    * `tenantSessionHooks()`), and on a tenant's host `/organization/set-active`
    * refuses any other organization, including clearing it, with
    * `403 ORGANIZATION_TENANT_MISMATCH`.
+   *
+   * It also scopes the organization plugin's team routes and `activeTeamId` to
+   * that organization (`TEAM_TENANT_MISMATCH`), and, with `@better-auth/sso`,
+   * limits SSO on a tenant's host to providers linked to that organization.
    */
   getOrganizationId?: (tenant: Tenant) => string | null | undefined;
+  /**
+   * Email domains a tenant owns, for `@better-auth/sso` providers that are not
+   * linked to an organization. Such a provider belongs to the tenant when all
+   * of its domains are one of these or a subdomain of one. Setting this, or
+   * `getOrganizationId`, turns the SSO checks on: on a tenant's host, sign-in,
+   * registration, callbacks and provider management then only use that
+   * tenant's providers, else `403 SSO_PROVIDER_TENANT_MISMATCH`.
+   */
+  getSSODomains?: (tenant: Tenant) => string[] | null | undefined | Promise<string[] | null | undefined>;
   /**
    * Decide whether a given request path must carry a tenant. Defaults to
    * requiring one everywhere, which is the safe default: a path that forgets to
@@ -102,6 +117,8 @@ const UNBOUND_PATHS = [
   "/sign-up",
   "/callback",
   "/oauth2/callback",
+  "/sso/callback",
+  "/sso/saml2/sp/acs",
   "/verify-email",
   "/reset-password",
   "/request-password-reset",
@@ -183,6 +200,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getTenant,
     getTenantByDomain,
     getOrganizationId,
+    getSSODomains,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
@@ -212,6 +230,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
       }
 
       if (!getOrganizationId) return;
+      const orgPlugin = ctx.options.plugins?.find((p) => p.id === "organization");
+      const teamsEnabled = Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
         options: {
           databaseHooks: {
@@ -221,14 +241,32 @@ export const multiTenant = (options: MultiTenantOptions) => {
                 // accept-invitation and others move activeOrganizationId too.
                 // Catch every write here. Clearing it is allowed: that only
                 // drops privileges, and leave/remove-member need it.
-                before: async (data: Record<string, unknown>, hookCtx: { context?: unknown } | null) => {
+                before: async (
+                  data: Record<string, unknown>,
+                  hookCtx: { context?: { adapter?: Parameters<typeof teamOrganizationId>[0] } } | null,
+                ): Promise<{ data: Record<string, unknown> } | undefined> => {
                   const expected = getTenantFromContext(hookCtx?.context)?.organizationId;
+                  if (!expected) return;
                   const next = data.activeOrganizationId;
-                  if (!expected || next === undefined || next === null || next === expected) return;
-                  throw new APIError("FORBIDDEN", {
-                    code: "ORGANIZATION_TENANT_MISMATCH",
-                    message: "Only this tenant's organization can be active here",
-                  });
+                  if (next && next !== expected) {
+                    throw new APIError("FORBIDDEN", {
+                      code: "ORGANIZATION_TENANT_MISMATCH",
+                      message: "Only this tenant's organization can be active here",
+                    });
+                  }
+                  // The active team must belong to the tenant's organization. This
+                  // also covers accept-invitation, which sets the team first.
+                  const team = data.activeTeamId;
+                  if (team) {
+                    const adapter = hookCtx?.context?.adapter;
+                    if (typeof team !== "string" || !adapter || (await teamOrganizationId(adapter, team)) !== expected) {
+                      throw teamTenantMismatch();
+                    }
+                  }
+                  // A team belongs to the organization that was active.
+                  if (teamsEnabled && next === null && team === undefined) {
+                    return { data: { ...data, activeTeamId: null } };
+                  }
                 },
               },
             },
@@ -268,6 +306,14 @@ export const multiTenant = (options: MultiTenantOptions) => {
       ORGANIZATION_TENANT_MISMATCH: {
         code: "ORGANIZATION_TENANT_MISMATCH",
         message: "Only this tenant's organization can be active here",
+      },
+      TEAM_TENANT_MISMATCH: {
+        code: "TEAM_TENANT_MISMATCH",
+        message: "This team belongs to a different tenant's organization",
+      },
+      SSO_PROVIDER_TENANT_MISMATCH: {
+        code: "SSO_PROVIDER_TENANT_MISMATCH",
+        message: "This SSO provider does not belong to this tenant",
       },
     },
 
@@ -389,7 +435,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
             }
           }),
         },
+        ...(getOrganizationId ? [teamScopeHook] : []),
+        ...(getOrganizationId || getSSODomains ? ssoGuardHooks(getSSODomains) : []),
       ],
+      after: getOrganizationId ? [teamListHook] : [],
     },
 
     endpoints: {

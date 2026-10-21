@@ -27,6 +27,9 @@ export function setup(
     organization: [],
     member: [],
     invitation: [],
+    team: [],
+    teamMember: [],
+    ssoProvider: [],
   };
   const auth = betterAuth({
     secret: "test-secret-0123456789-abcdefghijklmnop",
