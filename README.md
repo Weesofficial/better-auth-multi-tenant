@@ -14,6 +14,9 @@ issued for, and refuses a session that shows up on another tenant's host.
 npm install better-auth-multi-tenant
 ```
 
+Works with Better Auth 1.6 and 1.7 on Node 20.19 or later; CI tests every
+combination.
+
 ## Why this exists
 
 Better Auth's official `organization` plugin gives you organizations, members,

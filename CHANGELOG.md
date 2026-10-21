@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Tested against Better Auth 1.6 and 1.7 in CI on Node 20, 22 and 24.
+- Development dependencies updated (Better Auth 1.7, TypeScript 6, tsup 9).
+
 ## 0.4.0
 
 0.3.0 was never published to npm, so upgrading from 0.2.0 picks up the
