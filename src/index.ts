@@ -25,6 +25,7 @@ import { revokeScopeHook } from "./revoke.js";
 import { resolveScoping } from "./scoping.js";
 import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
 import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
+import { trustDeviceHook, verificationBindingHooks, verificationSchema } from "./verification.js";
 
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
@@ -98,6 +99,17 @@ export interface MultiTenantOptions extends ResolverOptions {
    * Defaults to `false`.
    */
   ssoRequireTenantMapping?: boolean;
+  /**
+   * Bind the codes, tokens and challenges that plugins store as verification
+   * rows (magic link, email and phone OTP, two-factor challenge and
+   * trusted-device record, passkey challenge, SIWE nonce, OAuth state) to the
+   * tenant that issued them. A row is stamped with `verification.tenantId` when
+   * it is written, and redeeming or deleting a live row on another tenant's host
+   * is refused with `403 VERIFICATION_TENANT_MISMATCH`. Defaults to `true`; it
+   * needs the `verification.tenantId` column, so migrate before upgrading, or set
+   * `false` to leave rows alone (for example with a database per tenant).
+   */
+  bindVerifications?: boolean;
   /**
    * Decide whether a user may get a session on a tenant. Better Auth users are
    * global, so without this an account created on one tenant signs in on every
@@ -238,6 +250,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     teams: _teams,
     sso: ssoOption,
     ssoRequireTenantMapping = false,
+    bindVerifications = true,
     canAccessTenant,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
@@ -282,13 +295,19 @@ export const multiTenant = (options: MultiTenantOptions) => {
       }
 
       const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
-      if (!getOrganizationId) return canAccessTenant ? { options: { databaseHooks: { session: accessHooks } } } : undefined;
+      const verificationHooks = bindVerifications ? verificationBindingHooks() : {};
+      if (!getOrganizationId) {
+        return canAccessTenant || bindVerifications
+          ? { options: { databaseHooks: { ...verificationHooks, ...(canAccessTenant ? { session: accessHooks } : {}) } } }
+          : undefined;
+      }
       const orgPlugin = ctx.options.plugins?.find((p) => p.id === "organization");
       const teamsEnabled =
         teamsScoped && Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
         options: {
           databaseHooks: {
+            ...verificationHooks,
             session: {
               ...accessHooks,
               update: {
@@ -341,6 +360,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
           },
         },
       },
+      ...(bindVerifications ? verificationSchema : {}),
     },
 
     $ERROR_CODES: {
@@ -369,6 +389,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
       TEAM_TENANT_MISMATCH: {
         code: "TEAM_TENANT_MISMATCH",
         message: "This team belongs to a different tenant's organization",
+      },
+      VERIFICATION_TENANT_MISMATCH: {
+        code: "VERIFICATION_TENANT_MISMATCH",
+        message: "This code or token was issued on a different tenant",
       },
       SSO_PROVIDER_TENANT_MISMATCH: {
         code: "SSO_PROVIDER_TENANT_MISMATCH",
@@ -466,6 +490,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
             }
           }),
         },
+        ...(bindVerifications ? [trustDeviceHook] : []),
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [organizationScopeHook] : []),
         ...(teamsScoped ? [teamScopeHook] : []),

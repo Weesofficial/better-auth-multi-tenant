@@ -19,7 +19,12 @@ export function setup(
     plugins = [],
   }: { trustedOrigins?: string[]; auth?: Partial<BetterAuthOptions>; plugins?: BetterAuthPlugin[] } = {},
 ) {
-  const db: { [model: string]: Record<string, unknown>[]; session: Record<string, unknown>[] } = {
+  const db: {
+    [model: string]: Record<string, unknown>[];
+    user: Record<string, unknown>[];
+    session: Record<string, unknown>[];
+    verification: Record<string, unknown>[];
+  } = {
     user: [],
     session: [],
     account: [],
@@ -30,6 +35,9 @@ export function setup(
     team: [],
     teamMember: [],
     ssoProvider: [],
+    twoFactor: [],
+    passkey: [],
+    walletAddress: [],
   };
   const auth = betterAuth({
     secret: "test-secret-0123456789-abcdefghijklmnop",
@@ -81,3 +89,11 @@ export function setup(
 }
 
 export const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code;
+
+/** Every cookie a response sets (expired ones dropped), as a `cookie` request header. */
+export const cookiesOf = (res: Response) =>
+  res.headers
+    .getSetCookie()
+    .map((c) => c.split(";")[0]!)
+    .filter((c) => !c.endsWith("="))
+    .join("; ");

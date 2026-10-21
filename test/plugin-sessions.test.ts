@@ -45,8 +45,16 @@ test("a magic-link session is stamped with its tenant and refused on another", a
   assert.equal(await codeOf(other), "CROSS_TENANT_SESSION");
 });
 
-test("a magic link followed on another tenant gets that tenant's stamp", async () => {
+test("a magic link followed on another tenant is refused", async () => {
   const { db, magicSignIn } = pluginSetup();
+  const res = await magicSignIn("acme.example.com", "globex.example.com");
+  assert.equal(res.status, 403);
+  assert.equal(await codeOf(res), "VERIFICATION_TENANT_MISMATCH");
+  assert.equal(db.session.length, 0);
+});
+
+test("with bindVerifications: false a magic link followed on another tenant gets that tenant's stamp", async () => {
+  const { db, magicSignIn } = pluginSetup({ bindVerifications: false });
   assert.equal((await magicSignIn("acme.example.com", "globex.example.com")).status, 200);
   assert.equal(db.session[0]!.tenantId, "t_globex");
 });
