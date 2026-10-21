@@ -18,6 +18,24 @@
   id or slug other than the tenant's with `403 ORGANIZATION_TENANT_MISMATCH`,
   and `organization/list` returns only the tenant's organization.
 
+### Added
+
+- `createTenantAuth` for database-per-tenant. It resolves the tenant from the
+  request host with the plugin's resolver and serves the request from a cached
+  Better Auth instance built by your `createAuth(tenant)` callback, with an
+  optional `maxSize` (least recently used eviction) and `onEvict` hook, plus
+  `getAuth(headers)` and `evict(tenantId?)`. Unknown or inactive tenants get
+  the plugin's 404 / 403 without creating an instance, and every instance keeps
+  the `multiTenant` plugin and session stamping, so a token copied across hosts
+  is still refused.
+- README: *Database per tenant*, including schema-per-tenant on Postgres with
+  `search_path`.
+
+### Changed
+
+- Internal: the plugin's tenant resolution moved into a shared function that
+  `createTenantAuth` also uses. Behaviour is unchanged.
+
 ## 0.4.1
 
 ### Security
