@@ -1,0 +1,36 @@
+name: Bug report
+description: Something does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If this lets a request or session cross a tenant boundary, please do not file it here.
+        Report it privately instead: https://github.com/Weesofficial/better-auth-multi-tenant/security/advisories/new
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: better-auth-multi-tenant, better-auth and Node versions.
+      placeholder: "better-auth-multi-tenant 0.3.0, better-auth 1.6.2, Node 22.11"
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: multiTenant() options
+      description: Your plugin options, with secrets removed.
+      render: ts
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Host, path and session state of each request. A failing test is ideal.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true

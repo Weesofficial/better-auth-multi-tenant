@@ -1,5 +1,10 @@
 # better-auth-multi-tenant
 
+[![npm version](https://img.shields.io/npm/v/better-auth-multi-tenant)](https://www.npmjs.com/package/better-auth-multi-tenant)
+[![npm downloads](https://img.shields.io/npm/dm/better-auth-multi-tenant)](https://www.npmjs.com/package/better-auth-multi-tenant)
+[![CI](https://github.com/Weesofficial/better-auth-multi-tenant/actions/workflows/ci.yml/badge.svg)](https://github.com/Weesofficial/better-auth-multi-tenant/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+
 Subdomain-based multi-tenancy for [Better Auth](https://better-auth.com).
 
 Resolves `acme.example.com` to a tenant, binds sessions to the tenant they were
@@ -197,13 +202,9 @@ OAuth provider configuration are not in this release.
 
 ## Contributing
 
-Issues and pull requests are welcome.
-
-```bash
-npm install
-npm run typecheck
-npm test
-```
+Issues and pull requests are welcome; see [CONTRIBUTING.md](./CONTRIBUTING.md).
+Found a way to cross a tenant boundary? Please report it privately, as
+described in [SECURITY.md](./SECURITY.md), rather than in a public issue.
 
 ## License
 
