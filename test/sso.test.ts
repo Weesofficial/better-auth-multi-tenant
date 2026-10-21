@@ -303,3 +303,36 @@ test("the shared callback cannot be checked, so a tenant's host refuses it", asy
   const ctx = ssoSetup({ getOrganizationId }, { redirectURI: "http://acme.example.com/api/auth/sso/callback" });
   await refused(await ctx.request("acme.example.com", "/sso/callback?code=abc&state=x"));
 });
+
+/** Sign up on acme and make that user an owner of both organizations and of every unlinked provider. */
+async function providerLister(overrides: Partial<MultiTenantOptions>) {
+  const ctx = ssoSetup(overrides);
+  const cookie = await ctx.signUp("acme.example.com");
+  const userId = ctx.db.user![0]!.id as string;
+  const now = new Date();
+  for (const p of ctx.db.ssoProvider!) p.userId = userId;
+  ctx.db.member!.push(
+    { id: "m_acme", organizationId: "org_acme", userId, role: "owner", createdAt: now },
+    { id: "m_globex", organizationId: "org_globex", userId, role: "owner", createdAt: now },
+  );
+  return async () => {
+    const res = await ctx.request("acme.example.com", "/sso/providers", { cookie });
+    assert.equal(res.status, 200, await res.clone().text());
+    return ((await res.json()) as { providers: { providerId: string }[] }).providers.map((p) => p.providerId).sort();
+  };
+}
+
+test("GET /sso/providers only lists the tenant's providers", async () => {
+  const list = await providerLister({ getOrganizationId, getSSODomains });
+  assert.deepEqual(await list(), ["acme-by-domain", "acme-idp", "acme-only"]);
+});
+
+test("GET /sso/providers in domain mode lists the tenant's domain-owned providers", async () => {
+  const list = await providerLister({ getSSODomains });
+  assert.deepEqual(await list(), ["acme-by-domain"]);
+});
+
+test("without the options GET /sso/providers lists everything the user administers", async () => {
+  const list = await providerLister({});
+  assert.equal((await list()).length, 6);
+});

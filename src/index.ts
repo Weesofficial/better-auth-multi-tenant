@@ -247,6 +247,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
   } = options;
 
   const headerName = options.headerName ?? "x-tenant";
+  const sso = getOrganizationId || getSSODomains ? ssoGuardHooks(getSSODomains) : { before: [], after: [] };
 
   return {
     id: "multi-tenant",
@@ -477,9 +478,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
         },
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [teamScopeHook, organizationScopeHook] : []),
-        ...(getOrganizationId || getSSODomains ? ssoGuardHooks(getSSODomains) : []),
+        ...sso.before,
       ],
-      after: getOrganizationId ? [teamListHook, invitationListHook] : [],
+      after: [...(getOrganizationId ? [teamListHook, invitationListHook] : []), ...sso.after],
     },
 
     endpoints: {

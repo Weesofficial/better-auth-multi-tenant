@@ -2,7 +2,7 @@ import { APIError, createAuthMiddleware } from "better-auth/api";
 import { getTenantFromContext, type Tenant } from "./context.js";
 
 /** The columns of the `ssoProvider` table this file reads. */
-interface ProviderRow {
+export interface ProviderRow {
   providerId: string;
   organizationId?: string | null;
   domain?: string | null;
@@ -47,7 +47,7 @@ export function ssoGuardHooks(getSSODomains?: (tenant: Tenant) => string[] | nul
     };
   };
 
-  return [
+  const before = [
     {
       // Sign-in picks a provider from a provider id, an organization slug, a
       // domain or an email. Choose it here from the tenant's own providers and
@@ -133,4 +133,20 @@ export function ssoGuardHooks(getSSODomains?: (tenant: Tenant) => string[] | nul
       }),
     },
   ];
+
+  const after = [
+    {
+      // The list covers every organization the user administers, whatever the
+      // tenant of the host; keep the tenant's providers.
+      matcher: (ctx: { path?: string }) => ctx.path === "/sso/providers",
+      handler: createAuthMiddleware(async (ctx) => {
+        const returned = ctx.context.returned as { providers?: ProviderRow[] } | Error | undefined;
+        const owns = await ownerCheck(ctx.context);
+        if (!owns || !returned || returned instanceof Error) return;
+        return ctx.json({ ...returned, providers: (returned.providers ?? []).filter((p) => owns(p)) });
+      }),
+    },
+  ];
+
+  return { before, after };
 }
