@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { betterAuth, type BetterAuthOptions, type BetterAuthPlugin } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { multiTenant, tenantSessionHooks, type MultiTenantOptions, type Tenant } from "../src/index.js";
@@ -89,6 +90,17 @@ export function setup(
 }
 
 export const codeOf = async (res: Response) => ((await res.json()) as { code?: string }).code;
+
+const betterAuthVersion = (
+  JSON.parse(readFileSync(new URL("../node_modules/better-auth/package.json", import.meta.url), "utf8")) as { version: string }
+).version;
+
+/**
+ * Whether the installed Better Auth is 1.7 or newer. The SIWE plugin's request
+ * shape and the cleanup of expired verification rows differ in 1.6, so the tests
+ * that depend on them run on 1.7+.
+ */
+export const betterAuth17 = Number(betterAuthVersion.split(".")[1]) >= 7;
 
 /** Every cookie a response sets (expired ones dropped), as a `cookie` request header. */
 export const cookiesOf = (res: Response) =>

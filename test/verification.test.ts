@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emailOTP, magicLink, phoneNumber, twoFactor } from "better-auth/plugins";
 import type { MultiTenantOptions } from "../src/index.js";
-import { codeOf, cookiesOf, setup } from "./helpers.js";
+import { betterAuth17, codeOf, cookiesOf, setup } from "./helpers.js";
 
 /**
  * A code, token or pending cookie that a plugin hands out on one tenant is bound
@@ -221,7 +221,7 @@ test("a row with no tenant stamp is refused on a tenant's host", async () => {
   assert.equal(db.session.length, 0);
 });
 
-test("expired rows of another tenant are still cleaned up", async () => {
+test("expired rows of another tenant are still cleaned up", { skip: !betterAuth17 }, async () => {
   const { request, db } = pluginSetup();
   await request(ACME, "/sign-in/magic-link", { method: "POST", body: { email: EMAIL } });
   db.verification[0]!.expiresAt = new Date(Date.now() - 1000);

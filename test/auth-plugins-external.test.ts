@@ -6,7 +6,10 @@ import { exportJWK, SignJWT } from "jose";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { genericOAuth, oneTap, siwe } from "better-auth/plugins";
 import { createTenantAuth, type MultiTenantOptions } from "../src/index.js";
-import { codeOf, cookiesOf, setup, TENANTS } from "./helpers.js";
+import { betterAuth17, codeOf, cookiesOf, setup, TENANTS } from "./helpers.js";
+
+// Better Auth 1.6's SIWE plugin takes a different request body.
+const siweTest = (name: string, fn: () => Promise<void>) => test(name, { skip: !betterAuth17 }, fn);
 
 /**
  * Plugins that talk to something outside Better Auth: Sign In With Ethereum,
@@ -48,7 +51,7 @@ function siweSetup(overrides: Partial<MultiTenantOptions> = {}, domain = "exampl
   return { ...ctx, nonce, verify };
 }
 
-test("siwe: a session is stamped with the tenant and refused on another", async () => {
+siweTest("siwe: a session is stamped with the tenant and refused on another", async () => {
   const { db, nonce, verify, request } = siweSetup();
   const res = await verify(ACME, siweMessage("example.com", await nonce(ACME)));
   assert.equal(res.status, 200, await res.clone().text());
@@ -57,7 +60,7 @@ test("siwe: a session is stamped with the tenant and refused on another", async 
   assert.equal(await codeOf(other), "CROSS_TENANT_SESSION");
 });
 
-test("siwe: a nonce issued on one tenant cannot be used on another", async () => {
+siweTest("siwe: a nonce issued on one tenant cannot be used on another", async () => {
   const { db, nonce, verify } = siweSetup();
   const issued = await nonce(ACME);
   const other = await verify(GLOBEX, siweMessage("example.com", issued));
@@ -70,7 +73,7 @@ test("siwe: a nonce issued on one tenant cannot be used on another", async () =>
   assert.equal(own.status, 200, await own.clone().text());
 });
 
-test("siwe: canAccessTenant refuses the session, but the wallet account is still created", async () => {
+siweTest("siwe: canAccessTenant refuses the session, but the wallet account is still created", async () => {
   const { db, nonce, verify } = siweSetup({ canAccessTenant: () => false });
   const res = await verify(ACME, siweMessage("example.com", await nonce(ACME)));
   assert.equal(await codeOf(res), "TENANT_ACCESS_DENIED");
@@ -79,7 +82,7 @@ test("siwe: canAccessTenant refuses the session, but the wallet account is still
   assert.equal(db.user.length, 1);
 });
 
-test("siwe: one configured domain serves every tenant in a single instance", async () => {
+siweTest("siwe: one configured domain serves every tenant in a single instance", async () => {
   // The message domain is compared with the plugin's `domain` option, not the host.
   const { nonce, verify } = siweSetup({}, ACME);
   const refused = await verify(GLOBEX, siweMessage(GLOBEX, await nonce(GLOBEX)));
@@ -88,7 +91,7 @@ test("siwe: one configured domain serves every tenant in a single instance", asy
   assert.equal(accepted.status, 200, "a message for the configured domain works on any tenant");
 });
 
-test("siwe: createTenantAuth gives each tenant its own domain", async () => {
+siweTest("siwe: createTenantAuth gives each tenant its own domain", async () => {
   const dbs = { acme: db(), globex: db() };
   const tenantAuth = createTenantAuth({
     baseDomain: "example.com",
