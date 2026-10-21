@@ -20,6 +20,24 @@
 
 ### Added
 
+- `trustProxy` option (`false`, `true`, a number of hops, or `(req) => boolean`)
+  to read the tenant host from `X-Forwarded-Host` or `Forwarded: host=` behind
+  Vercel, Netlify, Nginx and similar. Off by default, so only `Host` is read as
+  before. It takes the right-most trusted entry, ignores anything a client
+  prepended, and answers the new `400 INVALID_FORWARDED_HOST` for malformed
+  values, disagreeing headers or too short a list. The README lists the value
+  to use per platform. `createTenantAuth` takes it too, and `requestHost` is
+  exported.
+- `getTenant(client)` in `better-auth-multi-tenant/client`: framework-free,
+  never throws, returns `{ tenant, error }` with `error.code` typed to the
+  plugin's error codes. `TenantErrorCode` is exported.
+- `better-auth-multi-tenant/react` with `useTenant(client)`, returning
+  `{ tenant, error, isPending }`. `react` 18 or newer is an optional peer
+  dependency.
+- `npm run build` now bundles every entry point with esbuild for a
+  platform-neutral target and fails on Node built-ins or Node-only globals
+  (`Buffer`, `process`, `require`), so the package stays runnable on Workers,
+  Vercel Edge, Deno and Bun. `npm test` runs the same check on the sources.
 - `createTenantAuth` for database-per-tenant. It resolves the tenant from the
   request host with the plugin's resolver and serves the request from a cached
   Better Auth instance built by your `createAuth(tenant)` callback, with an
