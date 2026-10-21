@@ -13,6 +13,14 @@
     "auth"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Weesofficial/better-auth-multi-tenant.git"
+  },
+  "homepage": "https://github.com/Weesofficial/better-auth-multi-tenant#readme",
+  "bugs": {
+    "url": "https://github.com/Weesofficial/better-auth-multi-tenant/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "files": [
