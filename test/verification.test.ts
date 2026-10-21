@@ -192,6 +192,26 @@ test("bindVerifications: false leaves verification rows alone", async () => {
   assert.equal(res.status, 200);
 });
 
+test("with a baseURL that follows the host, a magic link opens on the tenant that sent it", async () => {
+  const urls: string[] = [];
+  const { request, db } = setup(
+    {},
+    {
+      trustedOrigins: ["http://*.example.com"],
+      auth: { baseURL: { allowedHosts: ["*.example.com"], protocol: "http", fallback: "http://acme.example.com" } },
+      plugins: [magicLink({ sendMagicLink: async ({ url }) => void urls.push(url) })],
+    },
+  );
+  for (const host of [ACME, GLOBEX]) {
+    await request(host, "/sign-in/magic-link", { method: "POST", body: { email: EMAIL } });
+    const link = new URL(urls.at(-1)!);
+    assert.equal(link.host, host);
+    const res = await request(link.host, `${link.pathname.replace("/api/auth", "")}${link.search}`);
+    assert.equal(res.status, 302, await res.clone().text()); // on to the callback URL, signed in
+  }
+  assert.deepEqual(db.session.map((s) => s.tenantId), ["t_acme", "t_globex"]);
+});
+
 test("a row with no tenant stamp is refused on a tenant's host", async () => {
   const { request, sent, db } = pluginSetup();
   await request(ACME, "/sign-in/magic-link", { method: "POST", body: { email: EMAIL } });
