@@ -24,11 +24,14 @@ import {
   type ResolvedTenant,
   type Tenant,
 } from "./context.js";
+import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { ssoGuardHooks } from "./sso.js";
 import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
 
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
+export { organizationMembersOnly } from "./access.js";
+export type { CanAccessTenant, TenantAccessContext } from "./access.js";
 export { tenantSessionHooks } from "./session-hooks.js";
 export type { TenantSessionHookOptions } from "./session-hooks.js";
 
@@ -71,6 +74,21 @@ export interface MultiTenantOptions extends ResolverOptions {
    * tenant's providers, else `403 SSO_PROVIDER_TENANT_MISMATCH`.
    */
   getSSODomains?: (tenant: Tenant) => string[] | null | undefined | Promise<string[] | null | undefined>;
+  /**
+   * Decide whether a user may get a session on a tenant. Better Auth users are
+   * global, so without this an account created on one tenant signs in on every
+   * other. When set, every session created on a tenant's host, by any plugin,
+   * is refused with `403 TENANT_ACCESS_DENIED` unless this returns `true`; a
+   * check that throws refuses too. It runs when a session is created, not on
+   * each request, so revoke the sessions of a user whose access you remove.
+   *
+   * Use {@link organizationMembersOnly} to allow only members of the tenant's
+   * organization. To keep sign-up on another tenant from revealing that an
+   * email is registered, also set `emailAndPassword.autoSignIn: false` or
+   * `requireEmailVerification: true`; Better Auth then answers the same way for
+   * a known and an unknown email.
+   */
+  canAccessTenant?: CanAccessTenant;
   /**
    * Decide whether a given request path must carry a tenant. Defaults to
    * requiring one everywhere, which is the safe default: a path that forgets to
@@ -201,6 +219,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getTenantByDomain,
     getOrganizationId,
     getSSODomains,
+    canAccessTenant,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
@@ -229,13 +248,15 @@ export const multiTenant = (options: MultiTenantOptions) => {
         );
       }
 
-      if (!getOrganizationId) return;
+      const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
+      if (!getOrganizationId) return canAccessTenant ? { options: { databaseHooks: { session: accessHooks } } } : undefined;
       const orgPlugin = ctx.options.plugins?.find((p) => p.id === "organization");
       const teamsEnabled = Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
         options: {
           databaseHooks: {
             session: {
+              ...accessHooks,
               update: {
                 // The set-active check covers one route; organization create,
                 // accept-invitation and others move activeOrganizationId too.
@@ -302,6 +323,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
       UNBOUND_SESSION: {
         code: "UNBOUND_SESSION",
         message: "This session is not bound to a tenant",
+      },
+      TENANT_ACCESS_DENIED: {
+        code: "TENANT_ACCESS_DENIED",
+        message: "This user cannot access this tenant",
       },
       ORGANIZATION_TENANT_MISMATCH: {
         code: "ORGANIZATION_TENANT_MISMATCH",
