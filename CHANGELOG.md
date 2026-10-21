@@ -20,6 +20,12 @@
 
 ### Added
 
+- Framework examples under `examples/` for Hono, Express, Nuxt, SvelteKit,
+  TanStack Start and Cloudflare Workers. Each installs the packed package, runs
+  two tenants on `*.localhost` and has a smoke test that replays an `acme`
+  session on `globex` and expects `403 CROSS_TENANT_SESSION`. A new `Examples`
+  workflow runs them all, and the README has a compatibility table.
+- `npm run pack:examples` builds the package and packs it for the examples.
 - `createTenantAuth` for database-per-tenant. It resolves the tenant from the
   request host with the plugin's resolver and serves the request from a cached
   Better Auth instance built by your `createAuth(tenant)` callback, with an
