@@ -1,6 +1,7 @@
 import { APIError, createAuthEndpoint, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import type { BetterAuthPlugin } from "better-auth";
 import {
+  normalizeHost,
   resolveTenantSlug,
   tenantOrigin,
   type ResolverOptions,
@@ -35,6 +36,17 @@ export interface MultiTenantOptions extends ResolverOptions {
    * turns that into a 404 rather than leaking whether the slug exists.
    */
   getTenant: (slug: string) => Promise<Tenant | null> | Tenant | null;
+  /**
+   * Look up a tenant by a custom domain such as `app.acme.com`. Called only
+   * for hosts outside `baseDomain`, with the host lowercased and its port
+   * removed. Return `null` for unknown domains — the plugin turns that into a
+   * 404, like an unknown slug.
+   *
+   * Verify that a tenant owns a domain (for example with a DNS TXT record)
+   * before you store the mapping this reads from, and add the domain to Better
+   * Auth's `trustedOrigins`.
+   */
+  getTenantByDomain?: (domain: string) => Promise<Tenant | null> | Tenant | null;
   /**
    * Decide whether a given request path must carry a tenant. Defaults to
    * requiring one everywhere, which is the safe default: a path that forgets to
@@ -93,6 +105,17 @@ const UNBOUND_PATHS = [
 const defaultEnforceSessionTenant = (path: string) =>
   !UNBOUND_PATHS.some((p) => path === p || path.startsWith(`${p}/`));
 
+/** Refuse unknown tenants (404, without saying why) and inactive ones (403). */
+function assertActive(tenant: Tenant | null): Tenant {
+  if (!tenant) {
+    throw new APIError("NOT_FOUND", { code: "TENANT_NOT_FOUND", message: "Unknown tenant" });
+  }
+  if (tenant.status !== undefined && tenant.status !== "active") {
+    throw new APIError("FORBIDDEN", { code: "TENANT_INACTIVE", message: "This tenant is not active" });
+  }
+  return tenant;
+}
+
 const REJECTION_STATUS: Record<TenantRejection, "BAD_REQUEST" | "NOT_FOUND"> = {
   "no-host": "BAD_REQUEST",
   "not-under-base-domain": "BAD_REQUEST",
@@ -127,6 +150,7 @@ const REJECTION_STATUS: Record<TenantRejection, "BAD_REQUEST" | "NOT_FOUND"> = {
 export const multiTenant = (options: MultiTenantOptions) => {
   const {
     getTenant,
+    getTenantByDomain,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
@@ -187,7 +211,18 @@ export const multiTenant = (options: MultiTenantOptions) => {
 
             const resolution = resolveTenantSlug(host, resolverOptions, headerValue);
 
-            if (!resolution.ok) {
+            let resolved: ResolvedTenant;
+            if (resolution.ok) {
+              const tenant = assertActive(await getTenant(resolution.slug));
+              resolved = { slug: resolution.slug, tenant, source: resolution.source };
+            } else if (resolution.reason === "not-under-base-domain" && getTenantByDomain) {
+              // A host outside the base domain can still be a tenant's own domain.
+              const domain = normalizeHost(host);
+              const found = await getTenantByDomain(domain);
+              if (!found && !requireTenant(path)) return;
+              const tenant = assertActive(found);
+              resolved = { slug: tenant.slug, tenant, source: "custom-domain", domain };
+            } else {
               if (!requireTenant(path)) return;
               throw new APIError(REJECTION_STATUS[resolution.reason], {
                 code: "TENANT_REQUIRED",
@@ -195,25 +230,6 @@ export const multiTenant = (options: MultiTenantOptions) => {
               });
             }
 
-            const tenant = await getTenant(resolution.slug);
-            if (!tenant) {
-              throw new APIError("NOT_FOUND", {
-                code: "TENANT_NOT_FOUND",
-                message: "Unknown tenant",
-              });
-            }
-            if (tenant.status !== undefined && tenant.status !== "active") {
-              throw new APIError("FORBIDDEN", {
-                code: "TENANT_INACTIVE",
-                message: "This tenant is not active",
-              });
-            }
-
-            const resolved: ResolvedTenant = {
-              slug: resolution.slug,
-              tenant,
-              source: resolution.source,
-            };
             setTenantOnContext(ctx.context, resolved);
             await onTenantResolved?.(resolved, path);
           }),
@@ -260,7 +276,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
           return ctx.json({
             id: resolved.tenant.id,
             slug: resolved.slug,
-            origin: tenantOrigin(resolved.slug, { ...resolverOptions, protocol, port }),
+            origin: resolved.domain
+              ? `${protocol ?? "https"}://${resolved.domain}${port ? `:${port}` : ""}`
+              : tenantOrigin(resolved.slug, { ...resolverOptions, protocol, port }),
           });
         },
       ),

@@ -6,7 +6,9 @@ import { APIError } from "better-auth/api";
 export interface ResolvedTenant {
   slug: string;
   tenant: Tenant;
-  source: "host" | "header";
+  source: "host" | "header" | "custom-domain";
+  /** The normalised host, set only when `source` is `"custom-domain"`. */
+  domain?: string;
 }
 
 /** The minimum a tenant record must expose for this plugin to gate on it. */

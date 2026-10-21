@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Custom domains. Pass `getTenantByDomain(domain)` to serve a tenant from its
+  own domain (`app.acme.com`) as well as its subdomain. It is called only for
+  hosts outside `baseDomain`; unknown domains are `404 TENANT_NOT_FOUND`, and
+  sessions stay bound to the tenant, so the cross-tenant check applies there
+  too.
+- `ResolvedTenant.domain`, set when the tenant was resolved from a custom
+  domain.
+
+### Changed
+
+- `ResolvedTenant.source` can now be `"custom-domain"`. If you switch on it
+  exhaustively, add the new case.
+
 ## 0.3.0
 
 ### Breaking

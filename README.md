@@ -108,12 +108,43 @@ multiTenant({
 When enabled, the header value is still validated against the same slug pattern
 and reserved list as a subdomain.
 
+## Custom domains
+
+Tenants can also be served from their own domain, such as `app.acme.com`,
+alongside `acme.example.com`. Pass `getTenantByDomain`:
+
+```ts
+multiTenant({
+  baseDomain: "example.com",
+  getTenant: (slug) => db.tenant.findUnique({ where: { slug } }),
+  getTenantByDomain: (domain) =>
+    db.tenant.findFirst({ where: { customDomain: domain, domainVerified: true } }),
+})
+```
+
+- It is called only for hosts **outside** `baseDomain`, with the host lowercased
+  and the port removed. Subdomains never reach it.
+- An unknown domain is a `404 TENANT_NOT_FOUND`, and an inactive tenant a
+  `403 TENANT_INACTIVE`, exactly as for subdomains.
+- Sessions stay bound to the tenant id, so a session from one tenant is refused
+  on another tenant's custom domain with `403 CROSS_TENANT_SESSION`.
+- `/multi-tenant/current` reports the custom domain as the `origin`, and the
+  resolved tenant has `source: "custom-domain"` and `domain` set.
+
+Two things are up to you:
+
+1. **Verify ownership** before you store a mapping, for example with a DNS TXT
+   record. Whoever controls the mapping controls which tenant a domain serves.
+2. **Trust the origin.** Add each custom domain to Better Auth's
+   `trustedOrigins`, or its CSRF checks will refuse requests from it.
+
 ## Options
 
 | Option | Default | Description |
 | --- | --- | --- |
 | `baseDomain` | — | Apex domain tenants live under, e.g. `example.com`. |
 | `getTenant` | — | `(slug) => Tenant \| null`. `null` becomes a 404. |
+| `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
 | `slugPattern` | DNS label, lowercase | Shape a slug must match. |
 | `allowNestedSubdomains` | `false` | Let `acme.eu.example.com` resolve to `acme`. |
