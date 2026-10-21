@@ -26,6 +26,7 @@ import {
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
+import { revokeScopeHook } from "./revoke.js";
 import { ssoGuardHooks } from "./sso.js";
 import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
 
@@ -119,6 +120,18 @@ export interface MultiTenantOptions extends ResolverOptions {
    * `"allow"` lets it through. Use it only while migrating existing sessions.
    */
   unboundSessions?: "reject" | "allow";
+  /**
+   * Which of the user's sessions `/revoke-sessions`, `/revoke-other-sessions`
+   * and `/change-password` with `revokeOtherSessions` end on a tenant's host.
+   *
+   * `"tenant"` (the default) ends the tenant's sessions only (plus any with no
+   * tenant), so one tenant cannot sign the user out of the others. Because the
+   * password is global, a password change then leaves the user's sessions on
+   * other tenants alive.
+   *
+   * `"all"` is Better Auth's behaviour: every session of the user.
+   */
+  revokeScope?: "tenant" | "all";
   /**
    * Protocol reported in the `origin` returned by `/multi-tenant/current`.
    * Defaults to `"https"`; set `"http"` for local development.
@@ -226,6 +239,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
     enforceSessionTenant = defaultEnforceSessionTenant,
     unboundSessions = "reject",
+    revokeScope = "tenant",
     protocol,
     port,
     onTenantResolved,
@@ -461,6 +475,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
             }
           }),
         },
+        ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [teamScopeHook, organizationScopeHook] : []),
         ...(getOrganizationId || getSSODomains ? ssoGuardHooks(getSSODomains) : []),
       ],
