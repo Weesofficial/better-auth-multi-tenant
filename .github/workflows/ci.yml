@@ -22,7 +22,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm install --no-save better-auth@${{ matrix.better-auth }}
+      # Not --no-save: npm 10 crashes on it (Cannot read properties of null, edgesOut).
+      - run: npm install --no-audit --no-fund better-auth@${{ matrix.better-auth }}
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
