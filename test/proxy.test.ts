@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { requestHost, type TrustProxy } from "../src/index.js";
-import { codeOf, setup } from "./helpers.js";
+import { memoryAdapter } from "better-auth/adapters/memory";
+import { createTenantAuth, requestHost, type TrustProxy } from "../src/index.js";
+import { codeOf, setup, TENANTS } from "./helpers.js";
 
 const hostOf = (headers: Record<string, string>, trustProxy?: TrustProxy) => {
   const result = requestHost({ headers: new Headers(headers) }, trustProxy);
@@ -163,4 +164,30 @@ test("a custom domain resolves from the forwarded host too", async () => {
   const res = await request("app.internal", "/multi-tenant/current", { headers: { "x-forwarded-host": "app.acme.com" } });
   assert.equal(res.status, 200);
   assert.equal(((await res.json()) as { origin: string }).origin, "https://app.acme.com");
+});
+
+test("createTenantAuth honors trustProxy and ignores the header without it", async () => {
+  const make = (trustProxy?: TrustProxy) =>
+    createTenantAuth({
+      baseDomain: "example.com",
+      getTenant: (slug) => TENANTS[slug] ?? null,
+      trustProxy,
+      createAuth: () => ({
+        secret: "test-secret-0123456789-abcdefghijklmnop",
+        baseURL: "http://acme.example.com",
+        database: memoryAdapter({ user: [], session: [], account: [], verification: [] }),
+        logger: { disabled: true },
+      }),
+    });
+  const get = (tenantAuth: ReturnType<typeof make>) =>
+    tenantAuth.handler(
+      new Request("http://app.internal/api/auth/multi-tenant/current", {
+        headers: { host: "app.internal", "x-forwarded-host": "acme.example.com" },
+      }),
+    );
+
+  assert.equal((await get(make())).status, 400);
+  const res = await get(make(true));
+  assert.equal(((await res.json()) as { slug: string }).slug, "acme");
+  assert.throws(() => make(-1), RangeError);
 });
