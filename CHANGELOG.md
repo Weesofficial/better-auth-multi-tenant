@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+0.3.0 was never published to npm, so upgrading from 0.2.0 picks up the
+0.3.0 changes below as well, including its breaking ones.
 
 ### Added
 
