@@ -138,6 +138,39 @@ Two things are up to you:
 2. **Trust the origin.** Add each custom domain to Better Auth's
    `trustedOrigins`, or its CSRF checks will refuse requests from it.
 
+## With the `organization` plugin
+
+If each tenant is one organization in Better Auth's
+[`organization` plugin](https://www.better-auth.com/docs/plugins/organization),
+tell the plugin how to map them:
+
+```ts
+import { organization } from "better-auth/plugins";
+
+betterAuth({
+  plugins: [
+    organization(),
+    multiTenant({
+      baseDomain: "example.com",
+      getTenant,
+      getOrganizationId: (tenant) => tenant.organizationId,
+    }),
+  ],
+  databaseHooks: tenantSessionHooks(),
+});
+```
+
+On a tenant's host:
+
+- a new session starts with the tenant's organization as
+  `activeOrganizationId`, stamped by `tenantSessionHooks()`;
+- `/organization/set-active` accepts only that organization, by id or by slug.
+  Switching to any other organization, or clearing it, is
+  `403 ORGANIZATION_TENANT_MISMATCH`.
+
+Membership checks stay with the `organization` plugin: the user still has to be
+a member of the tenant's organization.
+
 ## Cookies across subdomains
 
 Leave Better Auth's `advanced.crossSubDomainCookies` **off**. It puts one
@@ -153,6 +186,7 @@ warning at startup if it finds the option enabled.
 | `baseDomain` | — | Apex domain tenants live under, e.g. `example.com`. |
 | `getTenant` | — | `(slug) => Tenant \| null`. `null` becomes a 404. |
 | `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
+| `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts. See [With the `organization` plugin](#with-the-organization-plugin). |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
 | `slugPattern` | DNS label, lowercase | Shape a slug must match. |
 | `allowNestedSubdomains` | `false` | Let `acme.eu.example.com` resolve to `acme`. |
@@ -171,10 +205,11 @@ warning at startup if it finds the option enabled.
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `TENANT_REQUIRED` | 400 | The path needs a tenant and the host did not name one. |
-| `TENANT_NOT_FOUND` | 404 | `getTenant` returned `null`. |
+| `TENANT_NOT_FOUND` | 404 | `getTenant` (or `getTenantByDomain`) returned `null`. |
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
 | `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant. |
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
+| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's (see `getOrganizationId`). |
 
 ## Reading the tenant in your own code
 

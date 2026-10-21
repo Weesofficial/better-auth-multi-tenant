@@ -15,6 +15,11 @@
   enabled: one shared session cookie means a user can only be signed in to one
   tenant at a time.
 
+- Organization bridge. Pass `getOrganizationId(tenant)` to tie each tenant to
+  an organization in Better Auth's `organization` plugin: new sessions start
+  with it active, and `/organization/set-active` refuses any other
+  organization on that tenant's host (`403 ORGANIZATION_TENANT_MISMATCH`).
+
 ### Changed
 
 - `ResolvedTenant.source` can now be `"custom-domain"`. If you switch on it
