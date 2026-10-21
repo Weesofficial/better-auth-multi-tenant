@@ -285,6 +285,13 @@ export const multiTenant = (options: MultiTenantOptions) => {
         );
       }
 
+      if (bindVerifications && ctx.options.secondaryStorage && !ctx.options.verification?.storeInDatabase) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] verification rows live only in secondaryStorage, where Better Auth runs no database hooks, " +
+            "so codes and tokens are not bound to the tenant that issued them. Set verification.storeInDatabase: true to enforce bindVerifications.",
+        );
+      }
+
       if (ssoOption !== false && !hasSSOMapping && ctx.options.plugins?.some((p) => p.id === "sso")) {
         ctx.logger.warn(
           ssoRequireTenantMapping

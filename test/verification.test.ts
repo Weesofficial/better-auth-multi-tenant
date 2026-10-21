@@ -191,3 +191,50 @@ test("bindVerifications: false leaves verification rows alone", async () => {
   const res = await request(GLOBEX, `/magic-link/verify?token=${sent.links.at(-1)}`);
   assert.equal(res.status, 200);
 });
+
+test("a row with no tenant stamp is refused on a tenant's host", async () => {
+  const { request, sent, db } = pluginSetup();
+  await request(ACME, "/sign-in/magic-link", { method: "POST", body: { email: EMAIL } });
+  delete db.verification[0]!.tenantId; // written before the column existed
+  const res = await request(ACME, `/magic-link/verify?token=${sent.links.at(-1)}`);
+  assert.equal(await codeOf(res), "VERIFICATION_TENANT_MISMATCH");
+  assert.equal(db.session.length, 0);
+});
+
+test("expired rows of another tenant are still cleaned up", async () => {
+  const { request, db } = pluginSetup();
+  await request(ACME, "/sign-in/magic-link", { method: "POST", body: { email: EMAIL } });
+  db.verification[0]!.expiresAt = new Date(Date.now() - 1000);
+  // Any lookup of a verification row sweeps expired ones, from whichever host.
+  await request(GLOBEX, "/magic-link/verify?token=unknown");
+  assert.equal(db.verification.length, 0);
+});
+
+test("warns when verification lives only in secondary storage, where the binding cannot be enforced", async () => {
+  const warnings: string[] = [];
+  const logger = { level: "warn" as const, log: (level: string, message: string) => void (level === "warn" && warnings.push(message)) };
+  const store = new Map<string, string>();
+  const secondaryStorage = {
+    get: async (key: string) => store.get(key) ?? null,
+    set: async (key: string, value: string) => void store.set(key, value),
+    delete: async (key: string) => void store.delete(key),
+    increment: async (key: string) => {
+      const next = Number(store.get(key) ?? 0) + 1;
+      store.set(key, String(next));
+      return next;
+    },
+    getAndDelete: async (key: string) => {
+      const value = store.get(key) ?? null;
+      store.delete(key);
+      return value;
+    },
+  };
+  const { auth } = setup({}, { auth: { logger, secondaryStorage } });
+  await auth.$context;
+  const ours = warnings.filter((w) => w.includes("secondaryStorage"));
+  assert.equal(ours.length, 1, JSON.stringify(warnings));
+
+  const { auth: quiet } = setup({ bindVerifications: false }, { auth: { logger, secondaryStorage } });
+  await quiet.$context;
+  assert.equal(warnings.filter((w) => w.includes("secondaryStorage")).length, 1);
+});

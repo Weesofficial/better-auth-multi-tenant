@@ -215,6 +215,24 @@ test("passkey: a challenge issued on one tenant cannot be answered on another", 
   assert.equal(own.status, 200, await own.clone().text());
 });
 
+test("passkey: a registration challenge issued on one tenant cannot be answered on another", async () => {
+  const { request, signUp } = passkeySetup();
+  const acme = await signUp(ACME);
+  const globex = await request(GLOBEX, "/sign-in/email", { method: "POST", body: { email: "user@example.com", password: "correct-horse-battery" } });
+  const options = await request(ACME, "/passkey/generate-register-options", { cookie: acme });
+  assert.equal(options.status, 200, await options.clone().text());
+  const challenge = cookiesOf(options).split("; ").filter((c) => !c.includes("session"));
+
+  // The caller holds a session on both tenants and carries acme's challenge cookie to globex.
+  const res = await request(GLOBEX, "/passkey/verify-registration", {
+    method: "POST",
+    cookie: [cookiesOf(globex), ...challenge].join("; "),
+    body: { response: { id: "x", rawId: "x", type: "public-key", clientExtensionResults: {}, response: { clientDataJSON: "e30", attestationObject: "oA" } } },
+  });
+  assert.equal(res.status, 403, await res.clone().text());
+  assert.equal(await codeOf(res), "VERIFICATION_TENANT_MISMATCH");
+});
+
 test("passkey: canAccessTenant refuses the session", async () => {
   const { db, enroll, challenge, verify, key } = passkeySetup({ canAccessTenant: (_user, tenant) => tenant.slug === "acme" });
   await enroll();
