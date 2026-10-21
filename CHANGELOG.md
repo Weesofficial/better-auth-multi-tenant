@@ -49,6 +49,10 @@
   `getSSODomains` logs a startup warning. `ssoRequireTenantMapping: true` refuses
   every SSO route on tenant hosts in that case (default `false`).
 - Tests for sessions created by the magic-link and anonymous plugins.
+- End-to-end test of `createTenantAuth` (one memory database per tenant) with
+  organization teams and `@better-auth/sso`: each tenant's team and provider
+  work on its host, and another tenant's session, team id and provider id are
+  refused.
 - Teams. With `organization({ teams: { enabled: true } })` and
   `getOrganizationId`, team routes only work on the tenant's organization: an
   explicit `organizationId` for another one is `403 ORGANIZATION_TENANT_MISMATCH`,
