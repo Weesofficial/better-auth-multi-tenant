@@ -4,6 +4,34 @@
 
 ### Added
 
+- `canAccessTenant(user, tenant, { organizationId, adapter })`. Better Auth
+  users are global; with this set, a session is only created on a tenant's host
+  for a user it lets in, whichever plugin creates it, else
+  `403 TENANT_ACCESS_DENIED` (checked at session creation, not on each request).
+  `organizationMembersOnly` is a ready one for tenants mapped with
+  `getOrganizationId`. Sign-up on another tenant answers a known email like a
+  new one when Better Auth does (`autoSignIn: false` or
+  `requireEmailVerification: true`); otherwise it still answers `422`, see the
+  README.
+- Organization routes that name an id are scoped to the tenant's organization
+  (`403 ORGANIZATION_TENANT_MISMATCH`, or `TEAM_TENANT_MISMATCH`):
+  `invite-member` (`organizationId`, `teamId`), `get-invitation`,
+  `accept-invitation`, `reject-invitation`, `cancel-invitation`, `remove-member`,
+  `update-member-role`, `list-members`, `list-invitations`,
+  `get-active-member-role`, `get-organization`, `get-full-organization`,
+  `update` and `delete`. `list-user-invitations` returns only the tenant's
+  invitations and `check-slug` is refused.
+- `revokeScope` (default `"tenant"`). `/revoke-sessions`,
+  `/revoke-other-sessions` and `/change-password` with `revokeOtherSessions`
+  end only the tenant's sessions. `"all"` keeps Better Auth's behaviour.
+- `GET /sso/providers` returns only the tenant's providers.
+- SAML responses are bound to the tenant that started the flow: the RelayState
+  of the IdP redirect is recorded with the tenant, and the ACS route refuses one
+  that was not handed out on the host's tenant.
+- `@better-auth/sso` installed with neither `getOrganizationId` nor
+  `getSSODomains` logs a startup warning. `ssoRequireTenantMapping: true` refuses
+  every SSO route on tenant hosts in that case (default `false`).
+- Tests for sessions created by the magic-link and anonymous plugins.
 - Teams. With `organization({ teams: { enabled: true } })` and
   `getOrganizationId`, team routes only work on the tenant's organization: an
   explicit `organizationId` for another one is `403 ORGANIZATION_TENANT_MISMATCH`,
@@ -18,9 +46,8 @@
   (`403 SSO_PROVIDER_TENANT_MISMATCH`). Sign-in picks the tenant's provider
   itself and pins it by id. A callback that lands on another tenant's host is
   refused before any user or session is created. See the README for the limits:
-  the shared `redirectURI` callback is refused on tenant hosts, SAML responses
-  are not bound to the host that started the flow, and `GET /sso/providers` is
-  not filtered.
+  the shared `redirectURI` callback is refused on tenant hosts, and an
+  IdP-initiated SAML response is only checked against the provider.
 - `@better-auth/sso` is an optional peer dependency (`>=1.6.0`). Nothing in the
   plugin loads it.
 - CI also runs the suite against the latest and the 1.6 releases of
@@ -28,6 +55,10 @@
 
 ### Changed
 
+- **Behaviour change:** with `revokeScope` at its default, bulk revocation no
+  longer ends the user's sessions on other tenants. A password change with
+  `revokeOtherSessions` therefore leaves them alive; set `revokeScope: "all"`
+  for the old behaviour.
 - `/sso/callback` and `/sso/saml2/sp/acs` no longer need a session that matches
   the host: like the other callback routes, they run before a session is bound.
 - Development dependencies moved to `better-auth` and `@better-auth/sso`

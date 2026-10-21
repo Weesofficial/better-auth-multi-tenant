@@ -171,6 +171,71 @@ On a tenant's host:
 Membership checks stay with the `organization` plugin: the user still has to be
 a member of the tenant's organization.
 
+The routes that take an organization, an invitation or a member from the
+request are scoped to the tenant's organization as well, else
+`403 ORGANIZATION_TENANT_MISMATCH` (`TEAM_TENANT_MISMATCH` for a team):
+
+- `invite-member`, `remove-member`, `update-member-role`, `list-members`,
+  `list-invitations`, `get-active-member-role`, `get-organization`,
+  `get-full-organization`, `update` and `delete` refuse an explicit
+  `organizationId` or `organizationSlug` that is not the tenant's. Without one
+  they use the active organization, which has to be the tenant's too (a session
+  that predates the bridge can still have another one active). `invite-member`
+  also refuses a `teamId`, or any of several, from another organization.
+- An invitation named by id (`get-invitation`, `accept-invitation`,
+  `reject-invitation`, `cancel-invitation`) and a member named by id
+  (`remove-member`, `update-member-role`) have to belong to the tenant's
+  organization. An id that matches nothing is left to the route's own error.
+- `list-user-invitations` only returns the tenant's invitations.
+- `check-slug` is refused: it says whether any organization has a slug. Slugs
+  stay unique across tenants, so `organization/create` still answers "slug taken"
+  for another tenant's slug.
+
+`add-member` and `leave` are not scoped: `add-member` is server-only, and
+leaving another organization only removes access.
+
+### Who may sign in to a tenant
+
+Better Auth has one user table, so by default an account created on `acme`
+signs in on `globex` too and gets a `globex` session there. Set
+`canAccessTenant` to decide:
+
+```ts
+import { multiTenant, organizationMembersOnly } from "better-auth-multi-tenant";
+
+multiTenant({
+  baseDomain: "example.com",
+  getTenant,
+  getOrganizationId: (tenant) => tenant.organizationId,
+  // Only members of the tenant's organization...
+  canAccessTenant: organizationMembersOnly,
+  // ...or your own rule:
+  // canAccessTenant: async (user, tenant) => db.access.exists({ userId: user.id, tenantId: tenant.id }),
+});
+```
+
+It runs whenever a session is created on a tenant's host, whichever plugin
+creates it (password, OAuth, SSO, magic link, anonymous), and answers
+`403 TENANT_ACCESS_DENIED` with no session issued. A check that throws refuses
+too. Things to know:
+
+- It runs when the session is created, not on each request. A user whose access
+  you remove keeps their existing sessions until you revoke them.
+- `organizationMembersOnly` needs the user to be a member *before* signing in,
+  so invite and add members by another route; a self-service sign-up with
+  auto sign-in is refused (the account is created, no session is). It lets
+  nobody in on a tenant that has no organization.
+- A wrong password is still the ordinary `401`; `TENANT_ACCESS_DENIED` is only
+  answered once the credentials are right.
+- **Sign-up on another tenant reveals whether the email is registered**, as in
+  plain Better Auth (`422 USER_ALREADY_EXISTS`), unless Better Auth is told to
+  create no session at sign-up: with `emailAndPassword.autoSignIn: false` or
+  `requireEmailVerification: true` it answers a known email exactly like a new
+  one (`200`, `token: null`, a stand-in user; the stand-in carries `image: null`,
+  which a real user without an image does not). With auto sign-in on, a fresh
+  sign-up returns a session and cookie, so no hook can make the duplicate look
+  the same. Set one of those two options if this matters to you.
+
 ### Teams
 
 With `organization({ teams: { enabled: true } })` and `getOrganizationId`, the
@@ -209,9 +274,16 @@ multiTenant({
 });
 ```
 
-Setting either option turns the checks on; without them SSO is untouched. On a
-tenant's host, every provider the request reaches has to belong to the tenant,
-else `403 SSO_PROVIDER_TENANT_MISMATCH`:
+Setting either option turns the checks on. Without them SSO is untouched, so any
+tenant's host can use any provider, and the plugin logs a warning at startup if
+`@better-auth/sso` is installed. To fail closed instead, set
+`ssoRequireTenantMapping: true`: with neither option set, every SSO route
+(`/sign-in/sso` and `/sso/*`) is then refused on a tenant's host with
+`403 SSO_PROVIDER_TENANT_MISMATCH` until you add a mapping. It defaults to
+`false`, so existing setups keep working.
+
+With a mapping, on a tenant's host every provider the request reaches has to
+belong to the tenant, else `403 SSO_PROVIDER_TENANT_MISMATCH`:
 
 - **Sign-in** (`/sign-in/sso`). The provider is chosen from the tenant's own
   providers (by `providerId`, `organizationSlug`, `domain` or `email`) and then
@@ -254,15 +326,27 @@ through public hooks:
   `redirectURI` option, `/sso/callback` learns the provider from the OAuth
   state, which only the SSO plugin can read. It cannot be checked, so it gets
   `SSO_PROVIDER_TENANT_MISMATCH` on a tenant's host.
-- **SAML responses are not bound to a host.** The IdP posts to the ACS URL
-  cross-site, so no cookie ties the response to the host that started the
-  flow. The provider check still applies, which covers a response, or an
-  IdP-initiated one, sent to the wrong tenant's host.
-- **`GET /sso/providers` is not filtered.** It lists the providers the signed-in
-  user administers in every organization. Filter on `organizationId` in your
-  own code if tenants must not see each other's.
+- **SAML responses are bound to a host through RelayState, not through a
+  cookie.** The IdP posts to the ACS URL cross-site, so no cookie ties the
+  response to the browser that started the flow (a login-CSRF the SSO plugin
+  does not guard either). What is bound is the tenant: when `/sign-in/sso`
+  redirects to the IdP, the plugin records the RelayState that the SSO plugin put
+  in the redirect URL (a standard parameter of the redirect binding) together
+  with the tenant of the host. The ACS route on a tenant's host then refuses a
+  RelayState that was not handed out on that tenant, or is unknown or expired
+  (`SSO_PROVIDER_TENANT_MISMATCH`). This closes the case the provider check
+  cannot: two tenants whose `getSSODomains` overlap both own the provider, and a
+  response for a flow started on one could be posted to the other. Not covered:
+  an **IdP-initiated** response carries no RelayState, so only the provider check
+  applies to it (and the SSO plugin refuses it unless `allowIdpInitiated` is
+  on). A flow started before you upgrade, or a version of the SSO plugin that
+  stops using the redirect binding, has no record and is refused, which fails
+  closed.
 - **Users are global**, as ever: an SSO sign-in links to an existing account
-  with the same email, on any tenant.
+  with the same email, on any tenant. Use `canAccessTenant` to refuse it.
+
+`GET /sso/providers` lists only the tenant's providers (the same ownership rule
+as above). Without `getOrganizationId` or `getSSODomains` it is unfiltered.
 
 ## Cookies across subdomains
 
@@ -287,16 +371,45 @@ What the plugin enforces on a tenant's host:
   `getOrganizationId` or `getSSODomains`, SSO only uses the tenant's providers.
   See [Teams](#teams) and [With `@better-auth/sso`](#with-better-authsso) for
   what is and is not covered.
+- With `getOrganizationId`, organization, invitation and member routes that name
+  an id only work on the tenant's organization (see
+  [With the `organization` plugin](#with-the-organization-plugin)).
+- With `canAccessTenant`, a session is only created for a user the tenant lets
+  in, whichever plugin creates it
+  ([Who may sign in to a tenant](#who-may-sign-in-to-a-tenant)).
+- Every session created on a tenant's host through Better Auth's internal
+  adapter gets the tenant stamp from `tenantSessionHooks()`, whichever plugin
+  creates it; this repository tests password, magic-link and anonymous
+  sessions. One created on a request with no tenant is refused
+  (`400 TENANT_REQUIRED`) and one without a stamp is refused on use
+  (`403 UNBOUND_SESSION`), so a plugin that skips the adapter gets no working
+  session either. `@better-auth/api-key` is a separate package that this
+  repository does not install, so its sessions are not verified here: if you use
+  it with sessions enabled, test that a key from one tenant is refused on
+  another.
+- `/revoke-sessions`, `/revoke-other-sessions` and `/change-password` with
+  `revokeOtherSessions` only end the tenant's sessions
+  (and any with no tenant), see `revokeScope`. Password reset
+  (`revokeSessionsOnPasswordReset`) is not narrowed: it ends every session of the
+  user, which is what you want after a reset.
 
 What it does **not** do, so you can plan for it:
 
 - **Users are global.** Better Auth has one user table, so an account created
-  on `acme` can also sign in on `globex` and gets a `globex` session there.
-  Sign-up on another tenant with the same email answers
-  `422 USER_ALREADY_EXISTS`, which reveals that the email is registered
-  somewhere. If accounts must belong to a tenant, check membership in your own
-  code, or use the `organization` plugin's membership with
-  `getOrganizationId`.
+  on `acme` can also sign in on `globex` and gets a `globex` session there,
+  unless you set `canAccessTenant`. Without Better Auth's generic duplicate
+  answer (`autoSignIn: false` or `requireEmailVerification: true`), sign-up on
+  another tenant with the same email answers `422 USER_ALREADY_EXISTS`, which
+  reveals that the email is registered somewhere. `canAccessTenant` is checked
+  when a session is created, not on each request.
+- **Narrowed revocation has a cost.** Because the password is global, a
+  password change with `revokeOtherSessions` leaves the user's sessions on other
+  tenants alive, so a stolen session there survives. Set `revokeScope: "all"` to
+  end every session instead (a user then signs out of every tenant, which is
+  Better Auth's behaviour). The revoke routes are changed by handing them an
+  internal adapter that only lists the tenant's sessions, through the return
+  value of a `before` hook; this needs a Better Auth that merges a hook's
+  returned `context`, which 1.7 does and which is untested on 1.6.
 - **Suspended and unknown tenants look different**: `403 TENANT_INACTIVE`
   versus `404 TENANT_NOT_FOUND`. If that must not be visible, return `null`
   from `getTenant` for inactive tenants.
@@ -314,6 +427,9 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
 | `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts, scopes teams and `activeTeamId` to it, and ties SSO providers to it. See [With the `organization` plugin](#with-the-organization-plugin). |
 | `getSSODomains` | — | `(tenant) => string[]`. Email domains a tenant owns, for SSO providers with no organization. Turns on the SSO checks. See [With `@better-auth/sso`](#with-better-authsso). |
+| `canAccessTenant` | — | `(user, tenant, { organizationId, adapter }) => boolean`. Refuses sessions for users the tenant does not let in (`TENANT_ACCESS_DENIED`). `organizationMembersOnly` is a ready one. See [Who may sign in to a tenant](#who-may-sign-in-to-a-tenant). |
+| `ssoRequireTenantMapping` | `false` | With SSO installed and neither `getOrganizationId` nor `getSSODomains` set, `true` refuses every SSO route on tenant hosts instead of leaving SSO unscoped. |
+| `revokeScope` | `"tenant"` | `"tenant"` limits `/revoke-sessions`, `/revoke-other-sessions` and `/change-password` with `revokeOtherSessions` to the tenant's sessions; `"all"` ends every session of the user, as Better Auth does. |
 | `reserved` | `www, api, app, admin, auth, login, static, assets, cdn, mail, docs, status` | Subdomains that never resolve. Replaces the default when set. |
 | `slugPattern` | DNS label, lowercase | Shape a slug must match. |
 | `allowNestedSubdomains` | `false` | Let `acme.eu.example.com` resolve to `acme`. |
@@ -336,9 +452,10 @@ Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
 | `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant. |
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
-| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or a team route named another organization (see `getOrganizationId`). |
+| `TENANT_ACCESS_DENIED` | 403 | `canAccessTenant` did not let the user in; no session was created. |
+| `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or an organization, team, invitation or member route named another organization's (see `getOrganizationId`). |
 | `TEAM_TENANT_MISMATCH` | 403 | A team route or `activeTeamId` named a team of another tenant's organization. |
-| `SSO_PROVIDER_TENANT_MISMATCH` | 403 | An SSO sign-in, registration, callback or provider route reached a provider that does not belong to the tenant (see `getSSODomains`). |
+| `SSO_PROVIDER_TENANT_MISMATCH` | 403 | An SSO sign-in, registration, callback, SAML response or provider route reached a provider that does not belong to the tenant, or a SAML RelayState that was not handed out on this tenant (see `getSSODomains`, `ssoRequireTenantMapping`). |
 
 ## Reading the tenant in your own code
 
