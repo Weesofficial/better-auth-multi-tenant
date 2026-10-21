@@ -1,7 +1,13 @@
 import { APIError, createAuthEndpoint, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import type { BetterAuthPlugin } from "better-auth";
 import { tenantOrigin, type ResolverOptions } from "./resolver.js";
+import { ERROR_CODES } from "./error-codes.js";
+import { assertTrustProxy } from "./proxy.js";
 import { resolveTenant } from "./tenant.js";
+
+export type { TenantErrorCode } from "./error-codes.js";
+export { requestHost } from "./proxy.js";
+export type { ProxyRequest, RequestHost, TrustProxy } from "./proxy.js";
 
 export {
   resolveTenantSlug,
@@ -170,6 +176,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     onTenantResolved,
     ...resolverOptions
   } = options;
+  assertTrustProxy(resolverOptions.trustProxy);
 
   return {
     id: "multi-tenant",
@@ -225,26 +232,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
       },
     },
 
-    $ERROR_CODES: {
-      TENANT_REQUIRED: {
-        code: "TENANT_REQUIRED",
-        message: "This request must be made on a tenant subdomain",
-      },
-      TENANT_NOT_FOUND: { code: "TENANT_NOT_FOUND", message: "Unknown tenant" },
-      TENANT_INACTIVE: { code: "TENANT_INACTIVE", message: "This tenant is not active" },
-      CROSS_TENANT_SESSION: {
-        code: "CROSS_TENANT_SESSION",
-        message: "This session belongs to a different tenant",
-      },
-      UNBOUND_SESSION: {
-        code: "UNBOUND_SESSION",
-        message: "This session is not bound to a tenant",
-      },
-      ORGANIZATION_TENANT_MISMATCH: {
-        code: "ORGANIZATION_TENANT_MISMATCH",
-        message: "Only this tenant's organization can be active here",
-      },
-    },
+    $ERROR_CODES: ERROR_CODES,
 
     hooks: {
       before: [
@@ -257,6 +245,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
               { ...resolverOptions, getTenant, getTenantByDomain },
               ctx.headers,
               !requireTenant(path),
+              ctx.request,
             );
             if (!resolved) return;
 

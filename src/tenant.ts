@@ -1,5 +1,7 @@
 import { APIError } from "better-auth/api";
 import type { ResolvedTenant, Tenant } from "./context.js";
+import { ERROR_CODES } from "./error-codes.js";
+import { requestHost } from "./proxy.js";
 import { normalizeHost, resolveTenantSlug, type ResolverOptions, type TenantRejection } from "./resolver.js";
 
 /** What resolving a request to a tenant needs. Shared by the plugin and `createTenantAuth`. */
@@ -37,8 +39,16 @@ export async function resolveTenant(
   lookup: TenantLookup,
   headers: Headers | undefined,
   optional: boolean,
+  request?: Request,
 ): Promise<ResolvedTenant | null> {
-  const host = headers?.get("host");
+  let host: string | null | undefined;
+  if (headers) {
+    const result = requestHost({ headers, request }, lookup.trustProxy);
+    // Refused even where a tenant is optional: a malformed forwarded host means
+    // the proxy setup is wrong or someone is probing, not "no tenant".
+    if (!result.ok) throw new APIError("BAD_REQUEST", ERROR_CODES.INVALID_FORWARDED_HOST);
+    host = result.host;
+  }
   const headerValue = lookup.allowHeaderOverride ? headers?.get(lookup.headerName ?? "x-tenant") : null;
 
   const resolution = resolveTenantSlug(host, lookup, headerValue);

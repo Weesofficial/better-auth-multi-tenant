@@ -1,6 +1,7 @@
 import { betterAuth, type Auth, type BetterAuthOptions, type BetterAuthPlugin } from "better-auth";
 import { isAPIError } from "better-auth/api";
 import type { Tenant } from "./context.js";
+import { assertTrustProxy } from "./proxy.js";
 import { multiTenant, type MultiTenantOptions } from "./index.js";
 import { tenantSessionHooks } from "./session-hooks.js";
 import { resolveTenant } from "./tenant.js";
@@ -33,7 +34,7 @@ export interface TenantAuth {
    * The resolved tenant's instance, for `auth.api.*` calls in your own code.
    * Throws the same `APIError` the handler turns into a response.
    */
-  getAuth: (headers: Headers) => Promise<Auth>;
+  getAuth: (headers: Headers, request?: Request) => Promise<Auth>;
   /** Drop one tenant's cached instance (after its database moved, say), or all of them. */
   evict: (tenantId?: string) => Promise<void>;
 }
@@ -67,6 +68,7 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
   if (maxSize !== undefined && !(Number.isInteger(maxSize) && maxSize >= 1)) {
     throw new RangeError("createTenantAuth: maxSize must be a positive integer");
   }
+  assertTrustProxy(pluginOptions.trustProxy);
 
   // Keyed by tenant id; Map order is recency order (oldest first).
   const cache = new Map<string, { tenant: Tenant; auth: Auth }>();
@@ -106,8 +108,8 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
     return entry;
   };
 
-  const getAuth = async (headers: Headers) => {
-    const resolved = await resolveTenant(pluginOptions, headers, false);
+  const getAuth = async (headers: Headers, request?: Request) => {
+    const resolved = await resolveTenant(pluginOptions, headers, false, request);
     const { tenant } = resolved!; // `optional: false` never returns null.
 
     let entry = cache.get(tenant.id);
@@ -130,7 +132,7 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
     async handler(request) {
       let auth: Auth;
       try {
-        auth = await getAuth(request.headers);
+        auth = await getAuth(request.headers, request);
       } catch (error) {
         if (!isAPIError(error)) throw error;
         return Response.json(error.body, { status: error.statusCode, headers: error.headers });
