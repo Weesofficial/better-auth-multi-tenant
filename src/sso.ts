@@ -23,6 +23,17 @@ const domainsOf = (list: string | null | undefined) => (list ?? "").split(",").m
 const isUnder = (domain: string, parent: string) => domain === parent || domain.endsWith(`.${parent}`);
 
 /**
+ * `ssoRequireTenantMapping` without `getOrganizationId` or `getSSODomains`: no
+ * provider can be tied to a tenant, so none is usable on a tenant's host.
+ */
+export const ssoRefuseHook = {
+  matcher: (ctx: { path?: string }) => ctx.path === "/sign-in/sso" || (ctx.path ?? "").startsWith("/sso/"),
+  handler: createAuthMiddleware(async (ctx) => {
+    if (getTenantFromContext(ctx.context)) throw mismatch();
+  }),
+};
+
+/**
  * With an organization bridge or `getSSODomains`, SSO on a tenant's host only
  * touches that tenant's providers:
  *

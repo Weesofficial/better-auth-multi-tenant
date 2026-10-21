@@ -304,6 +304,61 @@ test("the shared callback cannot be checked, so a tenant's host refuses it", asy
   await refused(await ctx.request("acme.example.com", "/sso/callback?code=abc&state=x"));
 });
 
+const captureWarnings = () => {
+  const warnings: string[] = [];
+  const logger = {
+    level: "warn" as const,
+    log: (level: string, message: string) => {
+      if (level === "warn") warnings.push(message);
+    },
+  };
+  return { warnings, logger };
+};
+
+/** The warnings about SSO that the plugin logs at startup. */
+async function ssoWarnings(overrides: Partial<MultiTenantOptions>, withSSO = true) {
+  const { warnings, logger } = captureWarnings();
+  const { auth } = setup(overrides, { auth: { logger }, plugins: withSSO ? [organization(), sso()] : [organization()] });
+  await auth.$context;
+  return warnings.filter((w) => w.includes("[better-auth-multi-tenant]") && /SSO/.test(w));
+}
+
+test("warns at startup when SSO is installed and no tenant mapping is set", async () => {
+  const warnings = await ssoWarnings({});
+  assert.equal(warnings.length, 1, JSON.stringify(warnings));
+  assert.match(warnings[0]!, /getOrganizationId/);
+  assert.match(warnings[0]!, /getSSODomains/);
+});
+
+test("does not warn about SSO with a tenant mapping, or without the SSO plugin", async () => {
+  assert.deepEqual(await ssoWarnings({ getOrganizationId }), []);
+  assert.deepEqual(await ssoWarnings({ getSSODomains }), []);
+  assert.deepEqual(await ssoWarnings({}, false), []);
+});
+
+test("ssoRequireTenantMapping without a mapping refuses every SSO route on a tenant's host", async () => {
+  const { request, signUp } = ssoSetup({ ssoRequireTenantMapping: true });
+  const cookie = await signUp("acme.example.com");
+  const host = "acme.example.com";
+  await refused(await request(host, "/sign-in/sso", { method: "POST", body: { providerId: "acme-idp", callbackURL: "/" } }));
+  await refused(await request(host, "/sso/providers", { cookie }));
+  await refused(await request(host, "/sso/get-provider?providerId=acme-idp", { cookie }));
+  await refused(await request(host, "/sso/register", { method: "POST", cookie, body: { providerId: "x", issuer: IDP, domain: "x.org" } }));
+  await refused(await request(host, "/sso/callback/acme-idp?code=abc&state=x"));
+  await refused(await request(host, "/sso/saml2/sp/metadata?providerId=acme-idp"));
+});
+
+test("ssoRequireTenantMapping with a mapping behaves as usual", async () => {
+  const { signIn } = ssoSetup({ ssoRequireTenantMapping: true, getOrganizationId });
+  assert.equal(await clientIdOf(await signIn("acme.example.com", { providerId: "acme-idp" })), "client_acme-idp");
+});
+
+test("the warning says when ssoRequireTenantMapping is refusing SSO", async () => {
+  const warnings = await ssoWarnings({ ssoRequireTenantMapping: true });
+  assert.equal(warnings.length, 1, JSON.stringify(warnings));
+  assert.match(warnings[0]!, /refused/);
+});
+
 /** Sign up on acme and make that user an owner of both organizations and of every unlinked provider. */
 async function providerLister(overrides: Partial<MultiTenantOptions>) {
   const ctx = ssoSetup(overrides);

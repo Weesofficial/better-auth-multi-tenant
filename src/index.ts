@@ -27,7 +27,7 @@ import {
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { revokeScopeHook } from "./revoke.js";
-import { ssoGuardHooks } from "./sso.js";
+import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
 import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
 
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
@@ -76,6 +76,15 @@ export interface MultiTenantOptions extends ResolverOptions {
    * tenant's providers, else `403 SSO_PROVIDER_TENANT_MISMATCH`.
    */
   getSSODomains?: (tenant: Tenant) => string[] | null | undefined | Promise<string[] | null | undefined>;
+  /**
+   * With `@better-auth/sso` installed and neither `getOrganizationId` nor
+   * `getSSODomains` set, no provider is tied to a tenant, so any tenant's host
+   * can use any provider (the plugin logs a warning at startup). Set this to
+   * `true` to fail closed instead: every SSO route is refused on a tenant's host
+   * with `403 SSO_PROVIDER_TENANT_MISMATCH` until one of those options is set.
+   * Defaults to `false`.
+   */
+  ssoRequireTenantMapping?: boolean;
   /**
    * Decide whether a user may get a session on a tenant. Better Auth users are
    * global, so without this an account created on one tenant signs in on every
@@ -233,6 +242,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getTenantByDomain,
     getOrganizationId,
     getSSODomains,
+    ssoRequireTenantMapping = false,
     canAccessTenant,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
@@ -247,7 +257,10 @@ export const multiTenant = (options: MultiTenantOptions) => {
   } = options;
 
   const headerName = options.headerName ?? "x-tenant";
-  const sso = getOrganizationId || getSSODomains ? ssoGuardHooks(getSSODomains) : { before: [], after: [] };
+  const sso =
+    getOrganizationId || getSSODomains
+      ? ssoGuardHooks(getSSODomains)
+      : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
 
   return {
     id: "multi-tenant",
@@ -261,6 +274,16 @@ export const multiTenant = (options: MultiTenantOptions) => {
           "[better-auth-multi-tenant] advanced.crossSubDomainCookies is enabled, so every tenant subdomain shares one session cookie. " +
             "Users can only be signed in to one tenant at a time, and other tenants answer 403 CROSS_TENANT_SESSION. " +
             "Turn it off unless you deliberately want a single sign-in across tenants.",
+        );
+      }
+
+      if (!getOrganizationId && !getSSODomains && ctx.options.plugins?.some((p) => p.id === "sso")) {
+        ctx.logger.warn(
+          ssoRequireTenantMapping
+            ? "[better-auth-multi-tenant] @better-auth/sso is installed and ssoRequireTenantMapping is on, but neither getOrganizationId nor getSSODomains is set, " +
+                "so every SSO route is refused on a tenant's host. Set one of them to map providers to tenants."
+            : "[better-auth-multi-tenant] @better-auth/sso is installed but neither getOrganizationId nor getSSODomains is set, " +
+                "so any tenant's host can use any SSO provider. Set one of them, or set ssoRequireTenantMapping: true to refuse SSO until you do.",
         );
       }
 
