@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { betterAuth } from "better-auth";
+import { betterAuth, type BetterAuthOptions } from "better-auth";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { multiTenant, tenantSessionHooks, type MultiTenantOptions, type Tenant } from "../src/index.js";
 
@@ -13,7 +13,10 @@ export const TENANTS: Record<string, Tenant> = {
 
 export function setup(
   overrides: Partial<MultiTenantOptions> = {},
-  { trustedOrigins = ["http://*.example.com"] }: { trustedOrigins?: string[] } = {},
+  {
+    trustedOrigins = ["http://*.example.com"],
+    auth: authOverrides = {},
+  }: { trustedOrigins?: string[]; auth?: Partial<BetterAuthOptions> } = {},
 ) {
   const db: { [model: string]: Record<string, unknown>[]; session: Record<string, unknown>[] } = {
     user: [],
@@ -36,6 +39,7 @@ export function setup(
       }),
     ],
     databaseHooks: tenantSessionHooks(),
+    ...authOverrides,
   });
 
   const request = (host: string, path: string, init: { method?: string; body?: unknown; cookie?: string } = {}) =>

@@ -138,6 +138,14 @@ Two things are up to you:
 2. **Trust the origin.** Add each custom domain to Better Auth's
    `trustedOrigins`, or its CSRF checks will refuse requests from it.
 
+## Cookies across subdomains
+
+Leave Better Auth's `advanced.crossSubDomainCookies` **off**. It puts one
+session cookie on the apex domain, shared by every tenant subdomain. The
+cross-tenant check still refuses that session on the wrong tenant, but signing
+in to one tenant then signs the user out of every other one. The plugin logs a
+warning at startup if it finds the option enabled.
+
 ## Options
 
 | Option | Default | Description |

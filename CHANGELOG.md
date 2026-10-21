@@ -11,6 +11,9 @@
   too.
 - `ResolvedTenant.domain`, set when the tenant was resolved from a custom
   domain.
+- A startup warning when Better Auth's `advanced.crossSubDomainCookies` is
+  enabled: one shared session cookie means a user can only be signed in to one
+  tenant at a time.
 
 ### Changed
 
