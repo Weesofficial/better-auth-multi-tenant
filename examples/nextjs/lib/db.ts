@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import type { Tenant } from "better-auth-multi-tenant";
 
 /** One SQLite file holds Better Auth's tables and the app's own `tenant` table. */
-export const db = new Database("example.db");
+export const db = new Database(process.env.DATABASE_PATH ?? "example.db");
 
 export function ensureTenants() {
   db.exec(`CREATE TABLE IF NOT EXISTS tenant (

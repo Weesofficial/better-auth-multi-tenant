@@ -2,7 +2,7 @@ import { betterAuth } from "better-auth";
 import { multiTenant, tenantSessionHooks } from "better-auth-multi-tenant";
 import { db, findTenant } from "./db";
 
-export const ORIGIN_PORT = 3000;
+export const ORIGIN_PORT = Number(process.env.PORT ?? 3000);
 
 export const auth = betterAuth({
   database: db,
