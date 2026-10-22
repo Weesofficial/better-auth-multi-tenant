@@ -687,6 +687,33 @@ serve sign-in from the apex domain, opt out explicitly:
 tenantSessionHooks({ onMissingTenant: "allow" })
 ```
 
+## Compatibility
+
+Each framework has a minimal example under [`examples/`](./examples) that
+installs the packed package (not the source), runs two tenants on
+`*.localhost`, and has a smoke test: sign up on `acme`, replay the cookie on
+`globex`, expect `403 CROSS_TENANT_SESSION`. The
+[Examples workflow](./.github/workflows/examples.yml) runs every one on each
+push and pull request.
+
+| Framework | Runtime | Tested version | Better Auth integration | Status |
+| --- | --- | --- | --- | --- |
+| [Hono](./examples/hono) | Node 22 | `hono` 4.13.13, `@hono/node-server` 2.1.5 | `auth.handler(c.req.raw)` | Passing |
+| [Express](./examples/express) | Node 22 | `express` 5.3.0 | `toNodeHandler` (`better-auth/node`) | Passing |
+| [Nuxt](./examples/nuxt) | Node 22 (Nitro) | `nuxt` 4.6.2 | `auth.handler(toWebRequest(event))` | Passing |
+| [SvelteKit](./examples/sveltekit) | Node 22 (`adapter-node`) | `@sveltejs/kit` 3.1.0 | `svelteKitHandler` (`better-auth/svelte-kit`) | Passing |
+| [TanStack Start](./examples/tanstack-start) | Node 22 (Vite dev server) | `@tanstack/react-start` 1.169.3 | server route `handlers` calling `auth.handler(request)` | Passing |
+| [Cloudflare Workers](./examples/cloudflare-workers) | `workerd` via `wrangler dev --local` | `wrangler` 4.151.3, `hono` 4.13.13 | `auth.handler(c.req.raw)` | Passing |
+
+All use Better Auth 1.6.25. The examples keep users in memory and hardcode the
+tenant list; swap in your own database and `getTenant` lookup. TanStack Start is
+exercised on its dev server, and Workers on the local `workerd` simulator, not
+on a deployed Worker.
+
+To run one yourself, see its README; the short version is
+`npm run pack:examples`, then `npm install --no-package-lock
+--legacy-peer-deps && npm run smoke` inside the example.
+
 ## Scope
 
 Tenant resolution, session binding, cross-tenant rejection and callback origins

@@ -1,0 +1,21 @@
+{
+  "name": "example-cloudflare-workers",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "wrangler dev --local --port ${PORT:-3000} --show-interactive-dev-session=false",
+    "smoke": "tsx scripts/smoke.ts"
+  },
+  "dependencies": {
+    "@better-auth/memory-adapter": "1.6.25",
+    "better-auth": "1.6.25",
+    "better-auth-multi-tenant": "file:../.pack/better-auth-multi-tenant.tgz",
+    "hono": "4.13.13"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "wrangler": "4.151.3"
+  }
+}
