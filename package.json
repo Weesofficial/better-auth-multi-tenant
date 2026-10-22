@@ -49,16 +49,24 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "peerDependencies": {
+    "@better-auth/sso": ">=1.6.0",
     "better-auth": ">=1.6.0"
   },
   "devDependencies": {
+    "@better-auth/passkey": "^1.7.12",
+    "@better-auth/sso": "^1.7.12",
     "@types/node": "^22.20.1",
-    "better-auth": "^1.6.0",
+    "better-auth": "^1.7.12",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
   "engines": {
     "node": ">=20.19"
+  },
+  "peerDependenciesMeta": {
+    "@better-auth/sso": {
+      "optional": true
+    }
   }
 }
