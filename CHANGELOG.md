@@ -58,6 +58,12 @@
   platform-neutral target and fails on Node built-ins or Node-only globals
   (`Buffer`, `process`, `require`), so the package stays runnable on Workers,
   Vercel Edge, Deno and Bun. `npm test` runs the same check on the sources.
+- Framework examples under `examples/` for Hono, Express, Nuxt, SvelteKit,
+  TanStack Start and Cloudflare Workers. Each installs the packed package, runs
+  two tenants on `*.localhost` and has a smoke test that replays an `acme`
+  session on `globex` and expects `403 CROSS_TENANT_SESSION`. A new `Examples`
+  workflow runs them all, and the README has a compatibility table.
+- `npm run pack:examples` builds the package and packs it for the examples.
 - `bindVerifications` (default `true`) and the `verification.tenantId` column it
   needs, `VERIFICATION_TENANT_MISMATCH`. A startup warning when verification rows
   live only in `secondaryStorage`, where Better Auth runs no database hooks.

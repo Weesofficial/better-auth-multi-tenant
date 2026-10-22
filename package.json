@@ -49,6 +49,7 @@
   "scripts": {
     "build": "tsup && npm run check:edge",
     "check:edge": "node --import tsx scripts/edge-check.ts dist/index.js dist/client.js dist/react.js",
+    "pack:examples": "npm run build && rm -rf examples/.pack && mkdir -p examples/.pack && npm pack --pack-destination examples/.pack --silent && mv examples/.pack/*.tgz examples/.pack/better-auth-multi-tenant.tgz",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
