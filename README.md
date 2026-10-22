@@ -14,6 +14,8 @@ issued for, and refuses a session that shows up on another tenant's host.
 npm install better-auth-multi-tenant
 ```
 
+A runnable Next.js demo lives in [`examples/nextjs`](./examples/nextjs).
+
 ## Why this exists
 
 Better Auth's official `organization` plugin gives you organizations, members,
@@ -795,6 +797,7 @@ push and pull request.
 | --- | --- | --- | --- | --- |
 | [Hono](./examples/hono) | Node 22 | `hono` 4.13.13, `@hono/node-server` 2.1.5 | `auth.handler(c.req.raw)` | Passing |
 | [Express](./examples/express) | Node 22 | `express` 5.3.0 | `toNodeHandler` (`better-auth/node`) | Passing |
+| [Next.js](./examples/nextjs) | Node 22 (`next start`) | `next` 16.4.2, `react` 19.3.1 | route handler calling `auth.handler(request)` | Passing |
 | [Nuxt](./examples/nuxt) | Node 22 (Nitro) | `nuxt` 4.6.2 | `auth.handler(toWebRequest(event))` | Passing |
 | [SvelteKit](./examples/sveltekit) | Node 22 (`adapter-node`) | `@sveltejs/kit` 3.1.0 | `svelteKitHandler` (`better-auth/svelte-kit`) | Passing |
 | [TanStack Start](./examples/tanstack-start) | Node 22 (Vite dev server) | `@tanstack/react-start` 1.169.3 | server route `handlers` calling `auth.handler(request)` | Passing |
