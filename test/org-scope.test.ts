@@ -140,13 +140,21 @@ test("check-slug does not tell whether another organization exists", async () =>
 
 test("an explicit organization other than the tenant's is refused on the other routes too", async () => {
   const { cookie, post, get } = await signedIn();
+  // Older Better Auth releases lack some routes (get-organization is new in 1.7),
+  // and an unknown route is a 404 from the router before any hook runs.
+  const exposed = new Set(Object.values(organization().endpoints).map((e) => (e as { path: string }).path));
+  const paths = ["list-members", "list-invitations", "get-organization", "get-full-organization", "get-active-member-role"].filter((p) =>
+    exposed.has(`/organization/${p}`),
+  );
+  assert.ok(paths.length >= 4, paths.join());
   for (const query of ["organizationId=org_globex", "organizationSlug=globex"]) {
-    for (const path of ["list-members", "list-invitations", "get-organization", "get-full-organization", "get-active-member-role"]) {
+    for (const path of paths) {
       await refused(await get(cookie, `/organization/${path}?${query}`));
     }
   }
   await refused(await post(cookie, "/organization/delete", { organizationId: "org_globex" }));
-  await refused(await post(cookie, "/organization/update", { organizationId: "org_globex", data: { name: "Hacked" } }));});
+  await refused(await post(cookie, "/organization/update", { organizationId: "org_globex", data: { name: "Hacked" } }));
+});
 
 test("the tenant's own organization works on the other routes", async () => {
   const { cookie, get } = await signedIn();
