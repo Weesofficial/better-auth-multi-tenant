@@ -19,9 +19,19 @@ import {
   type ResolvedTenant,
   type Tenant,
 } from "./context.js";
+import { tenantAccessHook, type CanAccessTenant } from "./access.js";
+import { invitationListHook, organizationScopeHook } from "./organization.js";
+import { foreignSessionHook } from "./foreign-session.js";
+import { revokeScopeHook } from "./revoke.js";
+import { resolveScoping } from "./scoping.js";
+import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
+import { teamListHook, teamOrganizationId, teamScopeHook, teamTenantMismatch } from "./teams.js";
+import { trustDeviceHook, verificationBindingHooks, verificationSchema } from "./verification.js";
 
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
+export { organizationMembersOnly } from "./access.js";
+export type { CanAccessTenant, TenantAccessContext } from "./access.js";
 export { createTenantAuth } from "./tenant-auth.js";
 export type { TenantAuth, TenantAuthOptions } from "./tenant-auth.js";
 export { tenantSessionHooks } from "./session-hooks.js";
@@ -51,8 +61,71 @@ export interface MultiTenantOptions extends ResolverOptions {
    * `tenantSessionHooks()`), and on a tenant's host `/organization/set-active`
    * refuses any other organization, including clearing it, with
    * `403 ORGANIZATION_TENANT_MISMATCH`.
+   *
+   * It also scopes the organization plugin's team routes and `activeTeamId` to
+   * that organization (`TEAM_TENANT_MISMATCH`), and, with `@better-auth/sso`,
+   * limits SSO on a tenant's host to providers linked to that organization.
    */
   getOrganizationId?: (tenant: Tenant) => string | null | undefined;
+  /**
+   * Email domains a tenant owns, for `@better-auth/sso` providers that are not
+   * linked to an organization. Such a provider belongs to the tenant when all
+   * of its domains are one of these or a subdomain of one. Setting this, or
+   * `getOrganizationId`, turns the SSO checks on: on a tenant's host, sign-in,
+   * registration, callbacks and provider management then only use that
+   * tenant's providers, else `403 SSO_PROVIDER_TENANT_MISMATCH`.
+   */
+  getSSODomains?: (tenant: Tenant) => string[] | null | undefined | Promise<string[] | null | undefined>;
+  /**
+   * Scope the `organization` plugin's team routes, `list-user-teams` and
+   * `activeTeamId` to the tenant's organization. Defaults to `true` when
+   * `getOrganizationId` is set, else `false`. `false` leaves teams unscoped;
+   * `true` without `getOrganizationId` throws at startup.
+   */
+  teams?: boolean;
+  /**
+   * Scope `@better-auth/sso` to the tenant's providers. Defaults to `true` when
+   * `getOrganizationId` or `getSSODomains` is set, else `false`. `false` leaves
+   * SSO unscoped (no checks, no startup warning); `true` without either option
+   * throws at startup, and so does `false` together with
+   * `ssoRequireTenantMapping`.
+   */
+  sso?: boolean;
+  /**
+   * With `@better-auth/sso` installed and neither `getOrganizationId` nor
+   * `getSSODomains` set, no provider is tied to a tenant, so any tenant's host
+   * can use any provider (the plugin logs a warning at startup). Set this to
+   * `true` to fail closed instead: every SSO route is refused on a tenant's host
+   * with `403 SSO_PROVIDER_TENANT_MISMATCH` until one of those options is set.
+   * Defaults to `false`.
+   */
+  ssoRequireTenantMapping?: boolean;
+  /**
+   * Bind the codes, tokens and challenges that plugins store as verification
+   * rows (magic link, email and phone OTP, two-factor challenge and
+   * trusted-device record, passkey challenge, SIWE nonce, OAuth state) to the
+   * tenant that issued them. A row is stamped with `verification.tenantId` when
+   * it is written, and redeeming or deleting a live row on another tenant's host
+   * is refused with `403 VERIFICATION_TENANT_MISMATCH`. Defaults to `true`; it
+   * needs the `verification.tenantId` column, so migrate before upgrading, or set
+   * `false` to leave rows alone (for example with a database per tenant).
+   */
+  bindVerifications?: boolean;
+  /**
+   * Decide whether a user may get a session on a tenant. Better Auth users are
+   * global, so without this an account created on one tenant signs in on every
+   * other. When set, every session created on a tenant's host, by any plugin,
+   * is refused with `403 TENANT_ACCESS_DENIED` unless this returns `true`; a
+   * check that throws refuses too. It runs when a session is created, not on
+   * each request, so revoke the sessions of a user whose access you remove.
+   *
+   * Use {@link organizationMembersOnly} to allow only members of the tenant's
+   * organization. To keep sign-up on another tenant from revealing that an
+   * email is registered, also set `emailAndPassword.autoSignIn: false` or
+   * `requireEmailVerification: true`; Better Auth then answers the same way for
+   * a known and an unknown email.
+   */
+  canAccessTenant?: CanAccessTenant;
   /**
    * Decide whether a given request path must carry a tenant. Defaults to
    * requiring one everywhere, which is the safe default: a path that forgets to
@@ -83,6 +156,18 @@ export interface MultiTenantOptions extends ResolverOptions {
    */
   unboundSessions?: "reject" | "allow";
   /**
+   * Which of the user's sessions `/revoke-sessions`, `/revoke-other-sessions`
+   * and `/change-password` with `revokeOtherSessions` end on a tenant's host.
+   *
+   * `"tenant"` (the default) ends the tenant's sessions only (plus any with no
+   * tenant), so one tenant cannot sign the user out of the others. Because the
+   * password is global, a password change then leaves the user's sessions on
+   * other tenants alive.
+   *
+   * `"all"` is Better Auth's behaviour: every session of the user.
+   */
+  revokeScope?: "tenant" | "all";
+  /**
    * Protocol reported in the `origin` returned by `/multi-tenant/current`.
    * Defaults to `"https"`; set `"http"` for local development.
    */
@@ -99,6 +184,8 @@ const UNBOUND_PATHS = [
   "/sign-up",
   "/callback",
   "/oauth2/callback",
+  "/sso/callback",
+  "/sso/saml2/sp/acs",
   "/verify-email",
   "/reset-password",
   "/request-password-reset",
@@ -160,16 +247,28 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getTenant,
     getTenantByDomain,
     getOrganizationId,
+    getSSODomains,
+    teams: _teams,
+    sso: ssoOption,
+    ssoRequireTenantMapping = false,
+    bindVerifications = true,
+    canAccessTenant,
     requireTenant = () => true,
     getSessionTenantId = (session) =>
       (session as { session?: { tenantId?: string } } | null)?.session?.tenantId,
     enforceSessionTenant = defaultEnforceSessionTenant,
     unboundSessions = "reject",
+    revokeScope = "tenant",
     protocol,
     port,
     onTenantResolved,
     ...resolverOptions
   } = options;
+
+  const { hasSSOMapping, teamsScoped, ssoScoped } = resolveScoping(options);
+  const sso = ssoScoped
+    ? ssoGuardHooks(getSSODomains)
+    : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
 
   return {
     id: "multi-tenant",
@@ -186,24 +285,70 @@ export const multiTenant = (options: MultiTenantOptions) => {
         );
       }
 
-      if (!getOrganizationId) return;
+      if (bindVerifications && ctx.options.secondaryStorage && !ctx.options.verification?.storeInDatabase) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] verification rows live only in secondaryStorage, where Better Auth runs no database hooks, " +
+            "so codes and tokens are not bound to the tenant that issued them. Set verification.storeInDatabase: true to enforce bindVerifications.",
+        );
+      }
+
+      if (ssoOption !== false && !hasSSOMapping && ctx.options.plugins?.some((p) => p.id === "sso")) {
+        ctx.logger.warn(
+          ssoRequireTenantMapping
+            ? "[better-auth-multi-tenant] @better-auth/sso is installed and ssoRequireTenantMapping is on, but neither getOrganizationId nor getSSODomains is set, " +
+                "so every SSO route is refused on a tenant's host. Set one of them to map providers to tenants."
+            : "[better-auth-multi-tenant] @better-auth/sso is installed but neither getOrganizationId nor getSSODomains is set, " +
+                "so any tenant's host can use any SSO provider. Set one of them, or set ssoRequireTenantMapping: true to refuse SSO until you do.",
+        );
+      }
+
+      const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
+      const verificationHooks = bindVerifications ? verificationBindingHooks() : {};
+      if (!getOrganizationId) {
+        return canAccessTenant || bindVerifications
+          ? { options: { databaseHooks: { ...verificationHooks, ...(canAccessTenant ? { session: accessHooks } : {}) } } }
+          : undefined;
+      }
+      const orgPlugin = ctx.options.plugins?.find((p) => p.id === "organization");
+      const teamsEnabled =
+        teamsScoped && Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
         options: {
           databaseHooks: {
+            ...verificationHooks,
             session: {
+              ...accessHooks,
               update: {
                 // The set-active check covers one route; organization create,
                 // accept-invitation and others move activeOrganizationId too.
                 // Catch every write here. Clearing it is allowed: that only
                 // drops privileges, and leave/remove-member need it.
-                before: async (data: Record<string, unknown>, hookCtx: { context?: unknown } | null) => {
+                before: async (
+                  data: Record<string, unknown>,
+                  hookCtx: { context?: { adapter?: Parameters<typeof teamOrganizationId>[0] } } | null,
+                ): Promise<{ data: Record<string, unknown> } | undefined> => {
                   const expected = getTenantFromContext(hookCtx?.context)?.organizationId;
+                  if (!expected) return;
                   const next = data.activeOrganizationId;
-                  if (!expected || next === undefined || next === null || next === expected) return;
-                  throw new APIError("FORBIDDEN", {
-                    code: "ORGANIZATION_TENANT_MISMATCH",
-                    message: "Only this tenant's organization can be active here",
-                  });
+                  if (next && next !== expected) {
+                    throw new APIError("FORBIDDEN", {
+                      code: "ORGANIZATION_TENANT_MISMATCH",
+                      message: "Only this tenant's organization can be active here",
+                    });
+                  }
+                  // The active team must belong to the tenant's organization. This
+                  // also covers accept-invitation, which sets the team first.
+                  const team = data.activeTeamId;
+                  if (teamsScoped && team) {
+                    const adapter = hookCtx?.context?.adapter;
+                    if (typeof team !== "string" || !adapter || (await teamOrganizationId(adapter, team)) !== expected) {
+                      throw teamTenantMismatch();
+                    }
+                  }
+                  // A team belongs to the organization that was active.
+                  if (teamsEnabled && next === null && team === undefined) {
+                    return { data: { ...data, activeTeamId: null } };
+                  }
                 },
               },
             },
@@ -223,6 +368,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
           },
         },
       },
+      ...(bindVerifications ? verificationSchema : {}),
     },
 
     $ERROR_CODES: {
@@ -240,9 +386,25 @@ export const multiTenant = (options: MultiTenantOptions) => {
         code: "UNBOUND_SESSION",
         message: "This session is not bound to a tenant",
       },
+      TENANT_ACCESS_DENIED: {
+        code: "TENANT_ACCESS_DENIED",
+        message: "This user cannot access this tenant",
+      },
       ORGANIZATION_TENANT_MISMATCH: {
         code: "ORGANIZATION_TENANT_MISMATCH",
         message: "Only this tenant's organization can be active here",
+      },
+      TEAM_TENANT_MISMATCH: {
+        code: "TEAM_TENANT_MISMATCH",
+        message: "This team belongs to a different tenant's organization",
+      },
+      VERIFICATION_TENANT_MISMATCH: {
+        code: "VERIFICATION_TENANT_MISMATCH",
+        message: "This code or token was issued on a different tenant",
+      },
+      SSO_PROVIDER_TENANT_MISMATCH: {
+        code: "SSO_PROVIDER_TENANT_MISMATCH",
+        message: "This SSO provider does not belong to this tenant",
       },
     },
 
@@ -320,46 +482,6 @@ export const multiTenant = (options: MultiTenantOptions) => {
           }),
         },
         {
-          // Most organization endpoints take an explicit organizationId or
-          // organizationSlug (body or query) that overrides the active one, so
-          // locking the active organization alone would still let a tenant's
-          // host read and change another tenant's organization.
-          matcher: (ctx) => ctx.path?.startsWith("/organization/") ?? false,
-          handler: createAuthMiddleware(async (ctx) => {
-            const expected = getTenantFromContext(ctx.context)?.organizationId;
-            if (!expected) return;
-
-            for (const source of [ctx.body, ctx.query]) {
-              if (!source || typeof source !== "object") continue;
-              const { organizationId, organizationSlug } = source as {
-                organizationId?: string | null;
-                organizationSlug?: unknown;
-              };
-              let target = organizationId;
-              if (target === undefined && organizationSlug !== undefined) {
-                const org =
-                  typeof organizationSlug === "string"
-                    ? await ctx.context.adapter.findOne<{ id: string }>({
-                        model: "organization",
-                        where: [{ field: "slug", value: organizationSlug }],
-                      })
-                    : null;
-                // An unknown slug fails closed.
-                target = org?.id ?? null;
-              }
-              // No target at all keeps the current (tenant-stamped) organization.
-              if (target === undefined) continue;
-
-              if (target !== expected) {
-                throw new APIError("FORBIDDEN", {
-                  code: "ORGANIZATION_TENANT_MISMATCH",
-                  message: "Only this tenant's organization can be used here",
-                });
-              }
-            }
-          }),
-        },
-        {
           // A user's sessions span tenants; revoking one from another tenant's
           // host would let that host sign the user out elsewhere.
           matcher: (ctx) => ctx.path === "/revoke-session",
@@ -376,6 +498,12 @@ export const multiTenant = (options: MultiTenantOptions) => {
             }
           }),
         },
+        foreignSessionHook(getSessionTenantId, enforceSessionTenant),
+        ...(bindVerifications ? [trustDeviceHook] : []),
+        ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
+        ...(getOrganizationId ? [organizationScopeHook] : []),
+        ...(teamsScoped ? [teamScopeHook] : []),
+        ...sso.before,
       ],
       after: [
         {
@@ -398,6 +526,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
             return ctx.json(returned.filter((org: { id?: string }) => org.id === expected));
           }),
         },
+        ...(teamsScoped ? [teamListHook] : []),
+        ...(getOrganizationId ? [invitationListHook] : []),
+        ...sso.after,
       ],
     },
 
