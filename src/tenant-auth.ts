@@ -4,6 +4,7 @@ import type { Tenant } from "./context.js";
 import { assertTrustProxy } from "./proxy.js";
 import { multiTenant, type MultiTenantOptions } from "./index.js";
 import { tenantSessionHooks } from "./session-hooks.js";
+import { resolveScoping } from "./scoping.js";
 import { resolveTenant } from "./tenant.js";
 
 export interface TenantAuthOptions extends Omit<MultiTenantOptions, "requireTenant"> {
@@ -69,6 +70,8 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
     throw new RangeError("createTenantAuth: maxSize must be a positive integer");
   }
   assertTrustProxy(pluginOptions.trustProxy);
+
+  resolveScoping(pluginOptions); // Fail at startup, not on the first request.
 
   // Keyed by tenant id; Map order is recency order (oldest first).
   const cache = new Map<string, { tenant: Tenant; auth: Auth }>();

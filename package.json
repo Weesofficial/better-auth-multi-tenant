@@ -54,19 +54,17 @@
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "peerDependencies": {
+    "@better-auth/sso": ">=1.6.0",
     "better-auth": ">=1.6.0",
     "react": ">=18"
   },
-  "peerDependenciesMeta": {
-    "react": {
-      "optional": true
-    }
-  },
   "devDependencies": {
+    "@better-auth/passkey": "^1.7.12",
+    "@better-auth/sso": "^1.7.12",
     "@types/node": "^22.20.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "better-auth": "^1.6.0",
+    "better-auth": "^1.7.12",
     "esbuild": "^0.27.7",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
@@ -76,5 +74,13 @@
   },
   "engines": {
     "node": ">=20.19"
+  },
+  "peerDependenciesMeta": {
+    "@better-auth/sso": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   }
 }
