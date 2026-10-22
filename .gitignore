@@ -16,3 +16,6 @@ examples/*/.wrangler/
 examples/*/.tanstack/
 examples/*/.nitro/
 examples/*/dist/
+examples/*/.next/
+examples/*/*.db
+examples/*/next-env.d.ts
