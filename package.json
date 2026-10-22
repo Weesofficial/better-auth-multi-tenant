@@ -1,6 +1,6 @@
 {
   "name": "better-auth-multi-tenant",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Subdomain-based multi-tenancy for Better Auth: tenant resolution from the request host, tenant-bound sessions, and cross-tenant request rejection.",
   "keywords": [
     "better-auth",
@@ -39,25 +39,49 @@
       "types": "./dist/client.d.ts",
       "import": "./dist/client.js",
       "require": "./dist/client.cjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js",
+      "require": "./dist/react.cjs"
     }
   },
   "scripts": {
-    "build": "tsup",
+    "build": "tsup && npm run check:edge",
+    "check:edge": "node --import tsx scripts/edge-check.ts dist/index.js dist/client.js dist/react.js",
+    "pack:examples": "npm run build && rm -rf examples/.pack && mkdir -p examples/.pack && npm pack --pack-destination examples/.pack --silent && mv examples/.pack/*.tgz examples/.pack/better-auth-multi-tenant.tgz",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "peerDependencies": {
-    "better-auth": ">=1.6.0"
+    "@better-auth/sso": ">=1.6.0",
+    "better-auth": ">=1.6.0",
+    "react": ">=18"
   },
   "devDependencies": {
+    "@better-auth/passkey": "^1.7.12",
+    "@better-auth/sso": "^1.7.12",
     "@types/node": "^22.20.1",
-    "better-auth": "^1.6.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "better-auth": "^1.7.12",
+    "esbuild": "^0.27.7",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "tsup": "^8.3.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   },
   "engines": {
     "node": ">=20.19"
+  },
+  "peerDependenciesMeta": {
+    "@better-auth/sso": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    }
   }
 }

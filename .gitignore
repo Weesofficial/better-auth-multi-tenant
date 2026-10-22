@@ -7,3 +7,15 @@ dist/
 .env
 .env.*
 !.env.example
+examples/.pack/
+examples/*/build/
+examples/*/.output/
+examples/*/.nuxt/
+examples/*/.svelte-kit/
+examples/*/.wrangler/
+examples/*/.tanstack/
+examples/*/.nitro/
+examples/*/dist/
+examples/*/.next/
+examples/*/*.db
+examples/*/next-env.d.ts
