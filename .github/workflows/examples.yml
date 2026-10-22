@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        example: [hono, express, nuxt, sveltekit, tanstack-start, cloudflare-workers]
+        example: [hono, express, nextjs, nuxt, sveltekit, tanstack-start, cloudflare-workers]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
