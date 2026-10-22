@@ -46,7 +46,8 @@
   prepended, and answers the new `400 INVALID_FORWARDED_HOST` for malformed
   values, disagreeing headers or too short a list. The README lists the value
   to use per platform. `createTenantAuth` takes it too, and `requestHost` is
-  exported.
+  exported. The forwarded tenant is the one `canAccessTenant`, the verification
+  binding, teams and SSO see.
 - `getTenant(client)` in `better-auth-multi-tenant/client`: framework-free,
   never throws, returns `{ tenant, error }` with `error.code` typed to the
   plugin's error codes. `TenantErrorCode` is exported.

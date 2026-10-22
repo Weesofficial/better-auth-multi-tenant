@@ -446,7 +446,9 @@ turning it on.
 | AWS ALB | `false` | Passes `Host` through and adds no `X-Forwarded-Host`. Behind CloudFront, forward the `Host` header to the origin. |
 | CDN in front of Nginx or an ALB | `2` | Only if each layer appends to `X-Forwarded-Host`; otherwise `1`. |
 
-`createTenantAuth` takes the same option.
+`createTenantAuth` takes the same option. The tenant read from the forwarded host
+is the one every other check uses: session binding, `canAccessTenant`, the
+verification binding, teams and SSO.
 
 ## Edge runtimes
 
