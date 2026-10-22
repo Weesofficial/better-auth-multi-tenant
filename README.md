@@ -404,6 +404,60 @@ cross-tenant check still refuses that session on the wrong tenant, but signing
 in to one tenant then signs the user out of every other one. The plugin logs a
 warning at startup if it finds the option enabled.
 
+## Behind a reverse proxy
+
+By default the tenant comes from the `Host` header and nothing else, so a
+client-supplied `X-Forwarded-Host` or `Forwarded` header is ignored. If a proxy
+in front of you rewrites `Host` to an internal name, set `trustProxy` so the
+host is read from the header the proxy sets instead:
+
+```ts
+multiTenant({ baseDomain: "example.com", getTenant, trustProxy: true });
+```
+
+| Value | Meaning |
+| --- | --- |
+| `false` (default) | `Host` only. |
+| `true` | One trusted proxy: the right-most entry of `X-Forwarded-Host` (or the `host=` of the right-most `Forwarded` element). |
+| a number `n` | `n` trusted proxies in a row: the right-most `n` entries are yours, and the left-most of those is used. Fewer entries than `n` is rejected. |
+| `(req) => boolean` | Decided per request; `req` is `{ headers, request? }`. `true` trusts one proxy, anything else uses `Host`. Use it to trust the header only when a secret header or source you check is present. |
+
+Entries to the left of the trusted ones are client-controlled and never read.
+A forwarded host that is not a plain host name, IPv4 address or bracketed IPv6
+literal with an optional port, an empty entry, `X-Forwarded-Host` and
+`Forwarded` naming different hosts, or a list shorter than `n` answers
+`400 INVALID_FORWARDED_HOST`, also on paths that do not require a tenant. With
+neither header present the request did not come through a proxy and `Host` is
+used.
+
+Nothing is detected for you: whether the header can be trusted depends on
+whether your proxy overwrites it. If it only passes the client's value
+through, enabling `trustProxy` lets anyone pick their tenant. Confirm what your
+platform sends (log `host` and `x-forwarded-host` from a test request) before
+turning it on.
+
+| Platform | `trustProxy` | Why |
+| --- | --- | --- |
+| Vercel | `true` | Sets `x-forwarded-host` to the public host and replaces a client-supplied value. |
+| Cloudflare Workers / Pages | `false` | `Host` and `request.url` already carry the public host, and no `x-forwarded-host` is added. |
+| Cloudflare proxying to your origin | `false` | `Host` is passed through unchanged. |
+| Netlify | `true` | Functions can see an internal `Host`; the public host is in `x-forwarded-host`. |
+| Nginx | `false` with `proxy_set_header Host $host;`, or `true` with `proxy_set_header X-Forwarded-Host $host;` | Always set the header from `$host`, never from `$http_x_forwarded_host`, which repeats the client's value. |
+| AWS ALB | `false` | Passes `Host` through and adds no `X-Forwarded-Host`. Behind CloudFront, forward the `Host` header to the origin. |
+| CDN in front of Nginx or an ALB | `2` | Only if each layer appends to `X-Forwarded-Host`; otherwise `1`. |
+
+`createTenantAuth` takes the same option. The tenant read from the forwarded host
+is the one every other check uses: session binding, `canAccessTenant`, the
+verification binding, teams and SSO.
+
+## Edge runtimes
+
+The package uses no Node built-ins, `Buffer` or `process`, so it can run on
+Cloudflare Workers, Vercel Edge, Deno and Bun. `npm run build` bundles each
+entry point with esbuild for a platform-neutral target and fails on any Node
+built-in or Node-only global. That check covers this package only: Better Auth,
+your database adapter and the code in your callbacks must run there too.
+
 ## Security notes
 
 What the plugin enforces on a tenant's host:
@@ -491,6 +545,12 @@ What it does **not** do, so you can plan for it:
   from `getTenant` for inactive tenants.
 - **Your own queries are not filtered.** Scope every data query by tenant
   yourself.
+- **`trustProxy` is trust you grant.** The plugin cannot tell whether your
+  proxy overwrites `X-Forwarded-Host` or merely forwards the client's. If it
+  forwards it, a request can name any tenant; leave `trustProxy` off or use a
+  predicate that checks the request came from your proxy.
+- **The edge check is static.** It proves the bundle has no Node built-ins, not
+  that it was run on Workers, Deno or Bun.
 
 Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
 
@@ -599,6 +659,7 @@ a database per tenant.
 | `allowNestedSubdomains` | `false` | Let `acme.eu.example.com` resolve to `acme`. |
 | `allowHeaderOverride` | `false` | Trust a client header to name the tenant. |
 | `headerName` | `x-tenant` | Header consulted when the override is on. |
+| `trustProxy` | `false` | Read the host from `X-Forwarded-Host` / `Forwarded` instead of `Host`: `true`, a number of proxy hops, or `(req) => boolean`. See [Behind a reverse proxy](#behind-a-reverse-proxy). |
 | `requireTenant` | `() => true` | Whether a path must carry a tenant. |
 | `enforceSessionTenant` | all but auth entry points | Paths where the session's tenant must match the host's. |
 | `getSessionTenantId` | `session.session.tenantId` | How to read a session's tenant. |
@@ -620,6 +681,7 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | Code | Status | Meaning |
 | --- | --- | --- |
 | `TENANT_REQUIRED` | 400 | The path needs a tenant and the host did not name one. Always, with `createTenantAuth`. |
+| `INVALID_FORWARDED_HOST` | 400 | `trustProxy` is on and the forwarded host is malformed, disagrees between `X-Forwarded-Host` and `Forwarded`, or has fewer entries than the trusted hops. |
 | `TENANT_NOT_FOUND` | 404 | `getTenant` (or `getTenantByDomain`) returned `null`. Same for `createTenantAuth`, before any instance is created. |
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
 | `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant, or `/revoke-session` named another tenant's session. |
@@ -647,6 +709,39 @@ createAuthEndpoint("/projects", { method: "GET" }, async (ctx) => {
 ```
 
 `getTenantFromContext` is the non-throwing variant and returns `null` instead.
+
+## Reading the tenant on the client
+
+`getTenant(client)` calls `/multi-tenant/current` through your Better Auth
+client and never throws. It returns `{ tenant, error }`, where `error.code` is
+typed to the plugin's [error codes](#error-codes). It is framework-free, so it
+works in Vue, Svelte or a plain script:
+
+```ts
+import { getTenant } from "better-auth-multi-tenant/client";
+
+const { tenant, error } = await getTenant(authClient);
+if (error?.code === "TENANT_NOT_FOUND") showUnknownWorkspacePage();
+```
+
+For React, `useTenant(client)` in `better-auth-multi-tenant/react` returns
+`{ tenant, error, isPending }` (`react` 18 or newer is an optional peer
+dependency). It fetches in an effect, so server rendering produces the pending
+state, and it starts over if you pass a different client:
+
+```tsx
+import { useTenant } from "better-auth-multi-tenant/react";
+
+function Brand() {
+  const { tenant, error, isPending } = useTenant(authClient);
+  if (isPending) return null;
+  if (error?.code === "TENANT_NOT_FOUND") return <NotFound />;
+  return <h1>{tenant?.slug}</h1>;
+}
+```
+
+`error.status` is `0` when no usable response arrived (network failure, or a
+body that is not the plugin's).
 
 ## Testing isolation
 

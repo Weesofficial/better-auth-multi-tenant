@@ -6,6 +6,8 @@
  * that can be exhaustively unit tested on its own.
  */
 
+import type { TrustProxy } from "./proxy.js";
+
 /** Subdomains that must never resolve to a tenant. */
 export const DEFAULT_RESERVED = [
   "www",
@@ -58,6 +60,19 @@ export interface ResolverOptions {
   allowHeaderOverride?: boolean;
   /** Header consulted when {@link allowHeaderOverride} is on. */
   headerName?: string;
+  /**
+   * Read the host from `X-Forwarded-Host` (or `Forwarded: host=`) instead of
+   * `Host`, for a deployment behind a reverse proxy. Off by default, so a
+   * client-supplied forwarding header is ignored.
+   *
+   * A number is how many trusted proxies sit in front of you; the right-most
+   * that many entries are yours and the left-most of them names the host. `true`
+   * is `1`. A function is asked per request (for example "did it come from my
+   * load balancer?") and trusts one proxy when it returns `true`. Malformed
+   * values are rejected with `400 INVALID_FORWARDED_HOST`. Only turn it on when
+   * a proxy you control sets the header on every request.
+   */
+  trustProxy?: TrustProxy;
 }
 
 export type TenantResolution =
