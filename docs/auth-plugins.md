@@ -46,6 +46,7 @@ database shared by several instances, the binding refuses it.
 | `genericOAuth` | yes | State started on one tenant redeemed on another. The redirect URI follows `baseURL`. | **Fixed here**; `baseURL` and redirect URIs are **config needed** |
 | `oneTap` | yes | A Google ID token proves identity to every tenant of the instance. | **Config needed** (`createTenantAuth` with a client id per tenant); single instance **upstream** |
 | `siwe` | yes | Nonce used on another tenant. The message `domain` is one value per instance. | **Fixed here** (nonce); per-tenant domain is **config needed** (`createTenantAuth`) |
+| `deviceAuthorization` | yes | A code approved on one tenant redeemed for a session on another. Codes live in their own `deviceCode` table, not as verification rows. | **Fixed here** with `deviceCodes: true` (test: `test/device-authorization.test.ts`) |
 
 "Fixed here" means a failing test was written first and the fix lives in `src/`.
 Nothing in this plugin copies or patches Better Auth: it uses hooks,

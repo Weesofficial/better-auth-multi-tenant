@@ -597,6 +597,18 @@ secondary storage alone, creating a key on a tenant's host fails with
 them, or set their `tenantId`. The plugin warns at startup when the api-key plugin
 is installed and `apiKeys` is not set.
 
+### Device authorization
+
+Better Auth's `deviceAuthorization` plugin keeps its codes in a `deviceCode`
+table of its own, so without binding, a code a user approves on one tenant can
+be redeemed for a session on another. Set `deviceCodes: true` (and migrate the
+`deviceCode.tenantId` column): each code is stamped with the tenant that issued
+it, and on a tenant's host `/device/token`, `/device`, `/device/approve` and
+`/device/deny` only find that tenant's codes, so another tenant's code is
+`invalid_grant`. Codes issued before you turn it on stop working; they expire in
+minutes anyway. The plugin warns at startup when `deviceAuthorization` is
+installed and `deviceCodes` is not set.
+
 ## Cookies across subdomains
 
 Leave Better Auth's `advanced.crossSubDomainCookies` **off**. It puts one
@@ -862,6 +874,7 @@ a database per tenant.
 | `adminSharedUsers` | `"refuse"` | `"refuse"` stops admin routes that change the global user from touching a user who belongs to another organization too (`ADMIN_SHARED_USER`); `"allow"` lets them. |
 | `sameOriginOnly` | `true` | Refuse state-changing requests on a tenant's host from another origin (`CROSS_TENANT_ORIGIN`). Subdomain and custom-domain tenancy only. |
 | `apiKeys` | `false` | Bind `@better-auth/api-key` keys to the tenant they were created on (`apikey.tenantId`). See [API keys](#api-keys). |
+| `deviceCodes` | `false` | Bind `deviceAuthorization` codes to the tenant that issued them (`deviceCode.tenantId`). See [Device authorization](#device-authorization). |
 | `teams` | `true` with `getOrganizationId`, else `false` | Scope the organization plugin's team routes, `list-user-teams` and `activeTeamId` to the tenant's organization. `false` turns it off; `true` without `getOrganizationId` throws at startup. See [Teams](#teams). |
 | `sso` | `true` with `getOrganizationId` or `getSSODomains`, else `false` | Scope `@better-auth/sso` to the tenant's providers. `false` turns it off (no checks, no startup warning); `true` without either option throws at startup, and so does `false` with `ssoRequireTenantMapping`. |
 | `ssoRequireTenantMapping` | `false` | With SSO installed and neither `getOrganizationId` nor `getSSODomains` set, `true` refuses every SSO route on tenant hosts instead of leaving SSO unscoped. |
