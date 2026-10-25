@@ -76,7 +76,7 @@ export interface ResolverOptions {
 }
 
 export type TenantResolution =
-  | { ok: true; slug: string; source: "host" | "header" }
+  | { ok: true; slug: string; source: "host" | "header" | "path" | "custom" }
   | { ok: false; reason: TenantRejection };
 
 export type TenantRejection =
@@ -85,7 +85,23 @@ export type TenantRejection =
   | "apex-domain"
   | "nested-subdomain"
   | "reserved-subdomain"
-  | "malformed-slug";
+  | "malformed-slug"
+  | "no-tenant";
+
+/**
+ * Check a slug that came from somewhere other than the host (a path segment,
+ * your own resolver) against the same rules a subdomain must pass.
+ */
+export function checkSlug(
+  slug: string,
+  source: "host" | "header" | "path" | "custom",
+  options: Pick<ResolverOptions, "reserved" | "slugPattern"> = {},
+): TenantResolution {
+  const { reserved = DEFAULT_RESERVED, slugPattern = DEFAULT_SLUG_PATTERN } = options;
+  if (reserved.includes(slug)) return { ok: false, reason: "reserved-subdomain" };
+  if (!slugPattern.test(slug)) return { ok: false, reason: "malformed-slug" };
+  return { ok: true, slug, source };
+}
 
 /** Strip the port and any trailing dot, and lowercase. `""` if unusable. */
 export function normalizeHost(host: string | null | undefined): string {
@@ -111,13 +127,7 @@ export function resolveTenantSlug(
   options: ResolverOptions,
   headerValue?: string | null,
 ): TenantResolution {
-  const {
-    baseDomain,
-    reserved = DEFAULT_RESERVED,
-    slugPattern = DEFAULT_SLUG_PATTERN,
-    allowNestedSubdomains = false,
-    allowHeaderOverride = false,
-  } = options;
+  const { baseDomain, allowNestedSubdomains = false, allowHeaderOverride = false } = options;
 
   if (allowHeaderOverride && headerValue) {
     return finish(headerValue.trim().toLowerCase(), "header");
@@ -146,9 +156,7 @@ export function resolveTenantSlug(
 
   // Header and host slugs pass the same checks, in the same order.
   function finish(slug: string, source: "host" | "header"): TenantResolution {
-    if (reserved.includes(slug)) return { ok: false, reason: "reserved-subdomain" };
-    if (!slugPattern.test(slug)) return { ok: false, reason: "malformed-slug" };
-    return { ok: true, slug, source };
+    return checkSlug(slug, source, options);
   }
 }
 

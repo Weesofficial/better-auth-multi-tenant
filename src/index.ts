@@ -1,9 +1,11 @@
 import { APIError, createAuthEndpoint, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import type { BetterAuthPlugin } from "better-auth";
-import { tenantOrigin, type ResolverOptions } from "./resolver.js";
+import { createCookieGetter, getCookies } from "better-auth/cookies";
+import { tenantOrigin } from "./resolver.js";
 import { ERROR_CODES } from "./error-codes.js";
 import { assertTrustProxy } from "./proxy.js";
-import { resolveTenant } from "./tenant.js";
+import { assertPathPrefix } from "./path.js";
+import { resolutionMode, resolveTenant, type TenantResolutionOptions } from "./tenant.js";
 
 export type { TenantErrorCode } from "./error-codes.js";
 export { requestHost } from "./proxy.js";
@@ -11,6 +13,7 @@ export type { ProxyRequest, RequestHost, TrustProxy } from "./proxy.js";
 
 export {
   resolveTenantSlug,
+  checkSlug,
   normalizeHost,
   tenantOrigin,
   DEFAULT_RESERVED,
@@ -41,9 +44,13 @@ export type { CanAccessTenant, TenantAccessContext } from "./access.js";
 export { createTenantAuth } from "./tenant-auth.js";
 export type { TenantAuth, TenantAuthOptions } from "./tenant-auth.js";
 export { tenantSessionHooks } from "./session-hooks.js";
+export { cacheTenantLookup } from "./cache.js";
+export { withTenantPaths, tenantPathRequest } from "./path.js";
+export type { TenantResolutionOptions, TenantSlugRequest } from "./tenant.js";
+export type { CachedTenantLookup, TenantCacheOptions } from "./cache.js";
 export type { TenantSessionHookOptions } from "./session-hooks.js";
 
-export interface MultiTenantOptions extends ResolverOptions {
+export interface MultiTenantOptions extends TenantResolutionOptions {
   /**
    * Look up a tenant by slug. Return `null` for unknown slugs — the plugin
    * turns that into a 404. An inactive tenant is a 403 instead, so return
@@ -182,6 +189,13 @@ export interface MultiTenantOptions extends ResolverOptions {
   port?: number;
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
+  /**
+   * Give every tenant its own cookie names (`better-auth.acme.session_token`),
+   * so one browser can be signed in to several tenants on the same host.
+   * Defaults to `true` with `pathPrefix` and `false` otherwise; subdomains
+   * already keep their cookies apart.
+   */
+  tenantCookies?: boolean;
 }
 
 /** Paths that legitimately run without a tenant-bound session. */
@@ -268,9 +282,13 @@ export const multiTenant = (options: MultiTenantOptions) => {
     protocol,
     port,
     onTenantResolved,
+    tenantCookies: tenantCookiesOption,
     ...resolverOptions
   } = options;
   assertTrustProxy(resolverOptions.trustProxy);
+  const mode = resolutionMode(options);
+  if (mode === "path") assertPathPrefix(resolverOptions.pathPrefix!);
+  const tenantCookies = tenantCookiesOption ?? mode === "path";
 
   const { hasSSOMapping, teamsScoped, ssoScoped } = resolveScoping(options);
   const sso = ssoScoped
@@ -279,6 +297,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
 
   return {
     id: "multi-tenant",
+    // Read by `withTenantPaths`.
+    options: { pathPrefix: resolverOptions.pathPrefix },
 
     init(ctx) {
       // One apex-domain cookie for every tenant: the cross-tenant check still
@@ -392,6 +412,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
               ctx.headers,
               !requireTenant(path),
               ctx.request,
+              path,
             );
             if (!resolved) return;
 
@@ -399,6 +420,22 @@ export const multiTenant = (options: MultiTenantOptions) => {
             if (organizationId) resolved.organizationId = organizationId;
 
             setTenantOnContext(ctx.context, resolved);
+            // The context is this request's own copy, so these hold for every
+            // later hook and the endpoint, and for nothing else.
+            if (resolved.source === "path") {
+              // Links Better Auth builds (magic link, OAuth redirect URI, email
+              // verification) come back to this tenant's prefix.
+              ctx.context.baseURL = `${ctx.context.baseURL.replace(/\/+$/, "")}${resolverOptions.pathPrefix}/${resolved.slug}`;
+            }
+            if (tenantCookies) {
+              const base = ctx.context.options;
+              const tenantOptions = {
+                ...base,
+                advanced: { ...base.advanced, cookiePrefix: `${base.advanced?.cookiePrefix || "better-auth"}.${resolved.slug}` },
+              };
+              ctx.context.authCookies = getCookies(tenantOptions);
+              ctx.context.createAuthCookie = createCookieGetter(tenantOptions);
+            }
             await onTenantResolved?.(resolved, path);
           }),
         },
@@ -511,12 +548,15 @@ export const multiTenant = (options: MultiTenantOptions) => {
         { method: "GET" },
         async (ctx) => {
           const resolved = requireTenantFromContext(ctx.context);
+          const { baseDomain } = resolverOptions;
           return ctx.json({
             id: resolved.tenant.id,
             slug: resolved.slug,
             origin: resolved.domain
               ? `${protocol ?? "https"}://${resolved.domain}${port ? `:${port}` : ""}`
-              : tenantOrigin(resolved.slug, { ...resolverOptions, protocol, port }),
+              : baseDomain && resolved.source !== "path"
+                ? tenantOrigin(resolved.slug, { baseDomain, protocol, port })
+                : new URL(ctx.context.baseURL).origin,
           });
         },
       ),

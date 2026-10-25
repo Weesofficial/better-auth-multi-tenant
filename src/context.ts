@@ -6,7 +6,7 @@ import { APIError } from "better-auth/api";
 export interface ResolvedTenant {
   slug: string;
   tenant: Tenant;
-  source: "host" | "header" | "custom-domain";
+  source: "host" | "header" | "custom-domain" | "path" | "custom";
   /** The normalised host, set only when `source` is `"custom-domain"`. */
   domain?: string;
   /** The tenant's organization, when `getOrganizationId` is configured. */
