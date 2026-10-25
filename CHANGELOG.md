@@ -19,13 +19,15 @@
   On a tenant's host `list-users` lists the tenant organization's members only,
   routes that name a user refuse anyone else with `403 ADMIN_TENANT_MISMATCH`,
   and the admin session routes see the tenant's sessions only. Without
-  `getOrganizationId` the plugin warns that admin routes are unscoped.
+  `getOrganizationId` the plugin warns that admin routes are unscoped. A caller
+  with no session gets the admin plugin's own `401` before any membership check.
 - **`multiSession` plugin scoping.** `list-device-sessions` returns the tenant's
   sessions only; `set-active` and `revoke` refuse another tenant's session.
 - **`@better-auth/api-key` binding** (`apiKeys: true`, needs the new
   `apikey.tenantId` column). Keys are stamped with the tenant they were created
   on, refused as sessions on another tenant whichever order the plugins are in,
-  and hidden from the key routes of other tenants. With `getOrganizationId`,
+  and hidden from the key routes of other tenants and from
+  `auth.api.verifyApiKey` called with another tenant's headers. With `getOrganizationId`,
   organization keys must belong to the tenant's organization. The plugin warns
   when the api-key plugin is installed and `apiKeys` is not set.
 - `checkSlug` is exported, for validating a slug from your own source.

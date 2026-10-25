@@ -30,7 +30,15 @@ interface KeyAdapter {
 }
 
 /** Key routes whose lookups only see the tenant's keys on a tenant's host. */
-const SCOPED_PATHS = new Set(["/api-key/get", "/api-key/list", "/api-key/update", "/api-key/delete", "/api-key/verify"]);
+const SCOPED_PATHS = new Set(["/api-key/get", "/api-key/list", "/api-key/update", "/api-key/delete"]);
+
+/**
+ * `verifyApiKey` is server-only: it has no path, so a hook cannot tell it apart
+ * from other server-only endpoints. Every path-less call made with a tenant's
+ * headers gets the same scoping, which only narrows `apikey` lookups. A matcher
+ * sees such a call's path as `undefined`, and the handler as `"/"`.
+ */
+const pathless = (ctx: { path?: string }) => ctx.path === undefined;
 
 /**
  * `@better-auth/api-key` keys belong to a user (or an organization), and users
@@ -38,15 +46,16 @@ const SCOPED_PATHS = new Set(["/api-key/get", "/api-key/list", "/api-key/update"
  * `apiKeys: true` a key is stamped with the tenant it was created on
  * (`apikey.tenantId`), and on a tenant's host:
  *
- * - key routes (`get`, `list`, `update`, `delete`, `verify`) only find the
- *   tenant's keys, so another tenant's key is "not found";
+ * - key routes (`get`, `list`, `update`, `delete`, and `auth.api.verifyApiKey`
+ *   called with the request's headers) only find the tenant's keys, so another
+ *   tenant's key is "not found";
  * - creating or listing an organization's keys needs the tenant's organization
  *   (`ORGANIZATION_TENANT_MISMATCH`), with `getOrganizationId`.
  */
 export const apiKeyHooks = (organizationScoped: boolean) => ({
   before: [
     {
-      matcher: (ctx: { path?: string }) => SCOPED_PATHS.has(ctx.path ?? "") || ctx.path === "/api-key/create",
+      matcher: (ctx: { path?: string }) => pathless(ctx) || SCOPED_PATHS.has(ctx.path!) || ctx.path === "/api-key/create",
       handler: createAuthMiddleware(async (ctx) => {
         const resolved = getTenantFromContext(ctx.context);
         if (!resolved) return;
@@ -56,7 +65,7 @@ export const apiKeyHooks = (organizationScoped: boolean) => ({
           const organizationId = source?.organizationId;
           if (organizationId !== undefined && organizationId !== resolved.organizationId) throw organizationMismatch();
         }
-        if (!SCOPED_PATHS.has(ctx.path ?? "")) return;
+        if (ctx.path !== "/" && !SCOPED_PATHS.has(ctx.path)) return;
 
         const adapter = ctx.context.adapter as unknown as KeyAdapter;
         const scope = (model: string, where: Where = []): Where =>

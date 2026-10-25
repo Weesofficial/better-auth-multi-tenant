@@ -107,6 +107,18 @@ test("key routes on a tenant's host only find that tenant's keys", async () => {
   assert.equal(update.status, 404);
 });
 
+test("auth.api.verifyApiKey with a tenant's headers only finds that tenant's keys", async () => {
+  const { auth, signUp, createKey } = keySetup();
+  const { key } = await createKey("acme.example.com", await signUp("acme.example.com"));
+  const verify = (host: string) =>
+    (auth.api as unknown as { verifyApiKey: (input: unknown) => Promise<{ valid: boolean }> }).verifyApiKey({
+      body: { key },
+      headers: new Headers({ host }),
+    });
+  assert.equal((await verify("acme.example.com")).valid, true);
+  assert.equal((await verify("globex.example.com")).valid, false);
+});
+
 test("an organization's keys must belong to the tenant's organization", async () => {
   const ORG_OF: Record<string, string> = { acme: "org_acme", globex: "org_globex" };
   const getOrganizationId = (tenant: Tenant) => ORG_OF[tenant.slug];

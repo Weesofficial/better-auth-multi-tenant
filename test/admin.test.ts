@@ -138,6 +138,14 @@ test("a tenant with no organization has no members to manage", async () => {
   await refused(await get(`/admin/get-user?id=${alice}`), "ADMIN_TENANT_MISMATCH");
 });
 
+test("a caller with no session gets the admin plugin's 401, not a membership answer", async () => {
+  const { alice, bob, request } = await adminSetup();
+  for (const id of [alice, bob]) {
+    const res = await request("acme.example.com", `/admin/get-user?id=${id}`);
+    assert.equal(res.status, 401, await res.clone().text());
+  }
+});
+
 test("admin: false leaves the admin plugin unscoped", async () => {
   const { get } = await adminSetup({ getOrganizationId, admin: false });
   const body = (await (await get("/admin/list-users")).json()) as { total: number };

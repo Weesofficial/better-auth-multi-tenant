@@ -1,4 +1,4 @@
-import { APIError, createAuthMiddleware } from "better-auth/api";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { getTenantFromContext } from "./context.js";
 
 /** The slice of Better Auth's adapter this file needs. */
@@ -52,12 +52,16 @@ const TARGET_USER: Record<string, (ctx: { body?: unknown; query?: unknown }) => 
  *
  * A tenant with no organization has no members, so every one of these refuses.
  * Roles, bans and passwords stay global: they still apply on every tenant.
+ *
+ * A caller with no session is left to the admin plugin's own `401`, so these
+ * checks never tell an anonymous caller whether a user id is a member.
  */
 export const adminScopeHook = (getSessionTenantId: (session: unknown) => string | null | undefined) => ({
   matcher: (ctx: { path?: string }) => (ctx.path ?? "").startsWith("/admin/"),
   handler: createAuthMiddleware(async (ctx) => {
     const resolved = getTenantFromContext(ctx.context);
     if (!resolved) return;
+    if (!(await getSessionFromCtx(ctx, { disableRefresh: true }))) return;
     const organizationId = resolved.organizationId;
     const adapter = ctx.context.adapter as unknown as MemberAdapter;
     const internal = ctx.context.internalAdapter as unknown as AdminInternalAdapter;

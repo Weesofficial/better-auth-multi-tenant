@@ -556,8 +556,10 @@ the tenant it was created on:
   tenant with `403 CROSS_TENANT_SESSION`, and a key with no tenant with
   `403 UNBOUND_SESSION` (unless `unboundSessions: "allow"`). This holds whichever
   order the two plugins are listed in.
-- On a tenant's host, `/api-key/get`, `list`, `update`, `delete` and `verify`
-  only find that tenant's keys; another tenant's key is `404`.
+- On a tenant's host, `/api-key/get`, `list`, `update` and `delete` only find
+  that tenant's keys; another tenant's key is `404`. So does
+  `auth.api.verifyApiKey` when you pass it the request's headers: another
+  tenant's key comes back `valid: false`.
 - With `getOrganizationId`, creating or listing an organization's keys needs the
   tenant's organization (`403 ORGANIZATION_TENANT_MISMATCH`).
 
