@@ -32,6 +32,7 @@ import {
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { adminScopeHook, type CanAdministerTenant } from "./admin.js";
 import { apiKeyHooks, apiKeySchema, bindApiKeySessions } from "./api-key.js";
+import { deviceCodeHook, deviceCodeSchema } from "./device-authorization.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { foreignSessionHook, setScopedHeaders, withoutCookies } from "./foreign-session.js";
 import { multiSessionHooks } from "./multi-session.js";
@@ -151,6 +152,15 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * and this is not set.
    */
   apiKeys?: boolean;
+  /**
+   * Bind the `deviceAuthorization` plugin's codes to the tenant that issued
+   * them (`deviceCode.tenantId`). On a tenant's host the device routes only
+   * find that tenant's codes, so a code approved on one tenant cannot be
+   * redeemed for a session on another. Needs the column, so migrate when you
+   * turn it on. Defaults to `false`; the plugin warns at startup when
+   * `deviceAuthorization` is installed and this is not set.
+   */
+  deviceCodes?: boolean;
   /**
    * Scope `@better-auth/sso` to the tenant's providers. Defaults to `true` when
    * `getOrganizationId` or `getSSODomains` is set, else `false`. `false` leaves
@@ -344,6 +354,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     adminSharedUsers = "refuse",
     sameOriginOnly = true,
     apiKeys,
+    deviceCodes,
     sso: ssoOption,
     ssoRequireTenantMapping = false,
     bindVerifications = true,
@@ -479,6 +490,16 @@ export const multiTenant = (options: MultiTenantOptions) => {
         );
       }
 
+      const devicePlugin = ctx.options.plugins?.some((p) => p.id === "device-authorization");
+      if (deviceCodes && !devicePlugin) {
+        throw new Error("[better-auth-multi-tenant] deviceCodes: true needs the deviceAuthorization plugin.");
+      } else if (deviceCodes === undefined && devicePlugin) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] deviceAuthorization is installed but deviceCodes is not set, so a code approved on one tenant can be redeemed on every other. " +
+            "Set deviceCodes: true (and migrate the deviceCode.tenantId column) to bind codes to tenants, or deviceCodes: false to silence this.",
+        );
+      }
+
       if (ssoOption !== false && !hasSSOMapping && ctx.options.plugins?.some((p) => p.id === "sso")) {
         ctx.logger.warn(
           ssoRequireTenantMapping
@@ -557,6 +578,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
       },
       ...(bindVerifications ? verificationSchema : {}),
       ...(apiKeys ? apiKeySchema : {}),
+      ...(deviceCodes ? deviceCodeSchema : {}),
     },
 
     $ERROR_CODES: ERROR_CODES,
@@ -665,6 +687,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(adminScoped ? [adminScopeHook(getSessionTenantId, canAdministerTenant, adminSharedUsers)] : []),
         ...multiSessionHooks(getSessionTenantId, unboundSessions).before,
         ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).before : []),
+        ...(deviceCodes ? [deviceCodeHook] : []),
         ...sso.before,
       ],
       after: [

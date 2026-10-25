@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- **`deviceAuthorization` codes can be bound to a tenant** (`deviceCodes: true`,
+  needs the new `deviceCode.tenantId` column). Before, a code approved on one
+  tenant could be redeemed for a session on another. On a tenant's host the
+  device routes now only find that tenant's codes. The plugin warns at startup
+  when `deviceAuthorization` is installed and `deviceCodes` is not set.
+
 ## 0.6.0
 
 ### Security
