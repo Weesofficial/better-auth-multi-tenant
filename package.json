@@ -1,6 +1,6 @@
 {
   "name": "better-auth-multi-tenant",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Multi-tenancy for Better Auth by subdomain, custom domain or path: tenant resolution, tenant-bound sessions, and cross-tenant request rejection.",
   "keywords": [
     "better-auth",
