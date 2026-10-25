@@ -5,7 +5,7 @@
 export const ERROR_CODES = {
   TENANT_REQUIRED: {
     code: "TENANT_REQUIRED",
-    message: "This request must be made on a tenant subdomain",
+    message: "This request must name a tenant",
   },
   TENANT_NOT_FOUND: { code: "TENANT_NOT_FOUND", message: "Unknown tenant" },
   TENANT_INACTIVE: { code: "TENANT_INACTIVE", message: "This tenant is not active" },
@@ -36,6 +36,10 @@ export const ERROR_CODES = {
   VERIFICATION_TENANT_MISMATCH: {
     code: "VERIFICATION_TENANT_MISMATCH",
     message: "This code or token was issued on a different tenant",
+  },
+  ADMIN_TENANT_MISMATCH: {
+    code: "ADMIN_TENANT_MISMATCH",
+    message: "This user is not a member of this tenant",
   },
   SSO_PROVIDER_TENANT_MISMATCH: {
     code: "SSO_PROVIDER_TENANT_MISMATCH",

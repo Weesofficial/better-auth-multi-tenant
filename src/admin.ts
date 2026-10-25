@@ -1,0 +1,131 @@
+import { APIError, createAuthMiddleware } from "better-auth/api";
+import { getTenantFromContext } from "./context.js";
+
+/** The slice of Better Auth's adapter this file needs. */
+interface MemberAdapter {
+  findOne: <T>(args: { model: string; where: { field: string; value: string }[] }) => Promise<T | null>;
+  findMany: <T>(args: { model: string; where: { field: string; value: string }[] }) => Promise<T[]>;
+}
+
+type Where = { field: string; value: unknown; operator?: string }[];
+
+/** The slice of Better Auth's internal adapter the admin routes call and this file wraps. */
+interface AdminInternalAdapter {
+  listUsers: (limit?: number, offset?: number, sortBy?: unknown, where?: Where) => Promise<unknown[]>;
+  countTotalUsers: (where?: Where) => Promise<number>;
+  listSessions: (userId: string, ...rest: never[]) => Promise<{ token: string }[]>;
+  deleteSession: (token: string) => Promise<void>;
+  findSession: (token: string) => Promise<unknown>;
+}
+
+export const adminTenantMismatch = () =>
+  new APIError("FORBIDDEN", {
+    code: "ADMIN_TENANT_MISMATCH",
+    message: "This user is not a member of this tenant",
+  });
+
+/** Admin routes that act on one user, and where each takes the user id from. */
+const TARGET_USER: Record<string, (ctx: { body?: unknown; query?: unknown }) => unknown> = {
+  "/admin/get-user": (ctx) => (ctx.query as { id?: unknown } | undefined)?.id,
+  "/admin/set-role": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/update-user": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/list-user-sessions": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/ban-user": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/unban-user": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/impersonate-user": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/revoke-user-sessions": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/remove-user": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+  "/admin/set-user-password": (ctx) => (ctx.body as { userId?: unknown } | undefined)?.userId,
+};
+
+/**
+ * Better Auth's `admin` plugin works on every user of the instance, because
+ * users are global. On a tenant's host with an organization bridge, the admin
+ * routes only reach the members of the tenant's organization:
+ *
+ * - `list-users` lists (and counts) members only;
+ * - a route that names a user (`get-user`, `set-role`, `ban-user`,
+ *   `impersonate-user`, `remove-user`, …) refuses anyone else with
+ *   `403 ADMIN_TENANT_MISMATCH`;
+ * - `list-user-sessions` and `revoke-user-sessions` see the tenant's sessions
+ *   only, and `revoke-user-session` refuses another tenant's session.
+ *
+ * A tenant with no organization has no members, so every one of these refuses.
+ * Roles, bans and passwords stay global: they still apply on every tenant.
+ */
+export const adminScopeHook = (getSessionTenantId: (session: unknown) => string | null | undefined) => ({
+  matcher: (ctx: { path?: string }) => (ctx.path ?? "").startsWith("/admin/"),
+  handler: createAuthMiddleware(async (ctx) => {
+    const resolved = getTenantFromContext(ctx.context);
+    if (!resolved) return;
+    const organizationId = resolved.organizationId;
+    const adapter = ctx.context.adapter as unknown as MemberAdapter;
+    const internal = ctx.context.internalAdapter as unknown as AdminInternalAdapter;
+    const path = ctx.path ?? "";
+
+    const isMember = async (userId: string) =>
+      Boolean(
+        organizationId &&
+          (await adapter.findOne({
+            model: "member",
+            where: [
+              { field: "organizationId", value: organizationId },
+              { field: "userId", value: userId },
+            ],
+          })),
+      );
+
+    const target = TARGET_USER[path]?.(ctx);
+    // A missing id is the admin plugin's own validation error to give.
+    if (target !== undefined && target !== null && !(await isMember(String(target)))) throw adminTenantMismatch();
+
+    const ownSession = (session: unknown) => getSessionTenantId(session) === resolved.tenant.id;
+
+    if (path === "/admin/revoke-user-session") {
+      const token = (ctx.body as { sessionToken?: unknown } | undefined)?.sessionToken;
+      if (typeof token !== "string") return;
+      const found = await internal.findSession(token);
+      if (found && !ownSession(found)) {
+        throw new APIError("FORBIDDEN", {
+          code: "CROSS_TENANT_SESSION",
+          message: "This session belongs to a different tenant",
+        });
+      }
+      return;
+    }
+
+    if (path === "/admin/list-user-sessions" || path === "/admin/revoke-user-sessions") {
+      const listOwn = async (userId: string) => (await internal.listSessions(userId)).filter((session) => ownSession({ session }));
+      return {
+        context: {
+          context: {
+            internalAdapter: {
+              listSessions: listOwn,
+              deleteUserSessions: async (userId: string) => {
+                await Promise.all((await listOwn(userId)).map((s) => internal.deleteSession(s.token)));
+              },
+            },
+          },
+        },
+      };
+    }
+
+    if (path === "/admin/list-users") {
+      const members = organizationId
+        ? await adapter.findMany<{ userId: string }>({ model: "member", where: [{ field: "organizationId", value: organizationId }] })
+        : [];
+      const scope: Where = [{ field: "id", operator: "in", value: members.map((m) => m.userId) }];
+      return {
+        context: {
+          context: {
+            internalAdapter: {
+              listUsers: (limit?: number, offset?: number, sortBy?: unknown, where?: Where) =>
+                internal.listUsers(limit, offset, sortBy, [...(where ?? []), ...scope]),
+              countTotalUsers: (where?: Where) => internal.countTotalUsers([...(where ?? []), ...scope]),
+            },
+          },
+        },
+      };
+    }
+  }),
+});

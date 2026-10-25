@@ -29,6 +29,7 @@ import {
   type Tenant,
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
+import { adminScopeHook } from "./admin.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { foreignSessionHook } from "./foreign-session.js";
 import { revokeScopeHook } from "./revoke.js";
@@ -96,6 +97,14 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * `true` without `getOrganizationId` throws at startup.
    */
   teams?: boolean;
+  /**
+   * Scope Better Auth's `admin` plugin to the tenant's organization: on a
+   * tenant's host, `list-users` lists its members only, routes that name a user
+   * refuse anyone else (`ADMIN_TENANT_MISMATCH`), and the admin session routes
+   * see the tenant's sessions only. Defaults to `true` when `getOrganizationId`
+   * is set, else `false`; `true` without `getOrganizationId` throws at startup.
+   */
+  admin?: boolean;
   /**
    * Scope `@better-auth/sso` to the tenant's providers. Defaults to `true` when
    * `getOrganizationId` or `getSSODomains` is set, else `false`. `false` leaves
@@ -269,6 +278,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getOrganizationId,
     getSSODomains,
     teams: _teams,
+    admin: adminOption,
     sso: ssoOption,
     ssoRequireTenantMapping = false,
     bindVerifications = true,
@@ -290,7 +300,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
   if (mode === "path") assertPathPrefix(resolverOptions.pathPrefix!);
   const tenantCookies = tenantCookiesOption ?? mode === "path";
 
-  const { hasSSOMapping, teamsScoped, ssoScoped } = resolveScoping(options);
+  const { hasSSOMapping, teamsScoped, adminScoped, ssoScoped } = resolveScoping(options);
   const sso = ssoScoped
     ? ssoGuardHooks(getSSODomains)
     : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
@@ -316,6 +326,13 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ctx.logger.warn(
           "[better-auth-multi-tenant] verification rows live only in secondaryStorage, where Better Auth runs no database hooks, " +
             "so codes and tokens are not bound to the tenant that issued them. Set verification.storeInDatabase: true to enforce bindVerifications.",
+        );
+      }
+
+      if (adminOption !== false && !adminScoped && ctx.options.plugins?.some((p) => p.id === "admin")) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] the admin plugin is installed but getOrganizationId is not set, " +
+            "so admin routes on a tenant's host list and act on every tenant's users. Set getOrganizationId to scope them, or admin: false to silence this.",
         );
       }
 
@@ -513,6 +530,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [organizationScopeHook] : []),
         ...(teamsScoped ? [teamScopeHook] : []),
+        ...(adminScoped ? [adminScopeHook(getSessionTenantId)] : []),
         ...sso.before,
       ],
       after: [
