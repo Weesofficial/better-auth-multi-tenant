@@ -3,7 +3,8 @@ import type { BetterAuthPlugin } from "better-auth";
 import { createCookieGetter, getCookies } from "better-auth/cookies";
 import { tenantOrigin } from "./resolver.js";
 import { ERROR_CODES } from "./error-codes.js";
-import { assertTrustProxy } from "./proxy.js";
+import { assertTrustProxy, requestHost } from "./proxy.js";
+import { normalizeHost } from "./resolver.js";
 import { assertPathPrefix, trimTrailingSlashes } from "./path.js";
 import { resolutionMode, resolveTenant, type TenantResolutionOptions } from "./tenant.js";
 
@@ -29,7 +30,7 @@ import {
   type Tenant,
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
-import { adminScopeHook } from "./admin.js";
+import { adminScopeHook, type CanAdministerTenant } from "./admin.js";
 import { apiKeyHooks, apiKeySchema, bindApiKeySessions } from "./api-key.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { foreignSessionHook, setScopedHeaders, withoutCookies } from "./foreign-session.js";
@@ -43,6 +44,8 @@ import { trustDeviceHook, verificationBindingHooks, verificationSchema } from ".
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
 export { organizationMembersOnly } from "./access.js";
+export { organizationAdminsOnly } from "./admin.js";
+export type { CanAdministerTenant, TenantAdminContext } from "./admin.js";
 export type { CanAccessTenant, TenantAccessContext } from "./access.js";
 export { createTenantAuth } from "./tenant-auth.js";
 export type { TenantAuth, TenantAuthOptions } from "./tenant-auth.js";
@@ -107,6 +110,35 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * is set, else `false`; `true` without `getOrganizationId` throws at startup.
    */
   admin?: boolean;
+  /**
+   * Who may use the `admin` plugin's routes on a tenant's host, on top of the
+   * admin plugin's own role check. Better Auth's admin role is global, so
+   * without this an admin of one tenant administers every tenant they can get a
+   * session on. Defaults to {@link organizationAdminsOnly}: an `owner` or
+   * `admin` member of the tenant's organization. Anyone else gets
+   * `403 ADMIN_NOT_TENANT_ADMIN`; a check that throws refuses too.
+   */
+  canAdministerTenant?: CanAdministerTenant;
+  /**
+   * Admin routes that change the global user (`set-user-password`,
+   * `update-user`, `set-role`, `ban-user`, `unban-user`, `remove-user`) also
+   * change it on every other tenant the user belongs to: a password or email set
+   * on one tenant signs in on the others. `"refuse"` (the default) refuses them
+   * for a user who is also a member of another organization
+   * (`403 ADMIN_SHARED_USER`); `"allow"` lets them through.
+   */
+  adminSharedUsers?: "refuse" | "allow";
+  /**
+   * Refuse a request on a tenant's host whose `Origin` (or, without one,
+   * `Referer`) is another host, with `403 CROSS_TENANT_ORIGIN`. Tenant
+   * subdomains are "same-site" to each other, so cookies travel between them
+   * and a wildcard `trustedOrigins` such as `https://*.example.com` passes
+   * Better Auth's CSRF check: without this, a page on one tenant's subdomain can
+   * act as the signed-in user on another. Safe methods and the OAuth / SAML
+   * callback routes are exempt. Defaults to `true` for subdomain and
+   * custom-domain tenancy; path tenancy shares one host and is unaffected.
+   */
+  sameOriginOnly?: boolean;
   /**
    * Bind `@better-auth/api-key` keys to the tenant they were created on. A key
    * is stamped with `apikey.tenantId`; on a tenant's host the key routes only
@@ -238,6 +270,19 @@ const UNBOUND_PATHS = [
   "/ok",
 ];
 
+/** POST callbacks from an identity provider, which come from the provider's origin. */
+const PROVIDER_CALLBACKS = ["/callback", "/oauth2/callback", "/sso/callback", "/sso/saml2/sp/acs", "/sso/saml2/callback"];
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** The host of an `Origin` or `Referer` value; `""` for `null` or anything unparsable. */
+function hostOfUrl(value: string): string {
+  try {
+    return normalizeHost(new URL(value).host);
+  } catch {
+    return "";
+  }
+}
+
 // Match whole path segments, so `/sign-in/email` is an entry point but
 // `/sign-in-as-admin` or `/okta` is not.
 const defaultEnforceSessionTenant = (path: string) =>
@@ -295,6 +340,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getSSODomains,
     teams: _teams,
     admin: adminOption,
+    canAdministerTenant,
+    adminSharedUsers = "refuse",
+    sameOriginOnly = true,
     apiKeys,
     sso: ssoOption,
     ssoRequireTenantMapping = false,
@@ -394,6 +442,13 @@ export const multiTenant = (options: MultiTenantOptions) => {
           "[better-auth-multi-tenant] advanced.crossSubDomainCookies is enabled, so every tenant subdomain shares one session cookie. " +
             "Users can only be signed in to one tenant at a time, and other tenants answer 403 CROSS_TENANT_SESSION. " +
             "Turn it off unless you deliberately want a single sign-in across tenants.",
+        );
+      }
+
+      if (resolverOptions.allowHeaderOverride && (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.NODE_ENV === "production") {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] allowHeaderOverride is on in production, so any client can pick its tenant by sending the " +
+            `${resolverOptions.headerName ?? "x-tenant"} header. Use it for local development only.`,
         );
       }
 
@@ -550,6 +605,26 @@ export const multiTenant = (options: MultiTenantOptions) => {
           }),
         },
         {
+          // Tenant subdomains are same-site, so cookies cross between them and a
+          // wildcard trustedOrigins accepts any of them. Only the tenant's own
+          // host may make a state-changing request here.
+          matcher: (ctx) =>
+            sameOriginOnly &&
+            !PROVIDER_CALLBACKS.some((p) => ctx.path === p || (ctx.path ?? "").startsWith(`${p}/`)),
+          handler: createAuthMiddleware(async (ctx) => {
+            const resolved = getTenantFromContext(ctx.context);
+            if (!resolved || (resolved.source !== "host" && resolved.source !== "custom-domain")) return;
+            const method = (ctx.request?.method ?? ctx.method ?? "GET").toUpperCase();
+            if (SAFE_METHODS.has(method)) return;
+            const source = ctx.headers?.get("origin") ?? ctx.headers?.get("referer");
+            // No Origin or Referer: a server-side call, or Better Auth's own check refuses it.
+            if (source == null) return;
+            const host = requestHost({ headers: ctx.headers!, request: ctx.request }, resolverOptions.trustProxy);
+            if (host.ok && hostOfUrl(source) === normalizeHost(host.host)) return;
+            throw new APIError("FORBIDDEN", ERROR_CODES.CROSS_TENANT_ORIGIN);
+          }),
+        },
+        {
           // With an organization bridge, a tenant's host only ever has that
           // tenant's organization active.
           // Creating an organization makes it active unless the caller keeps
@@ -587,7 +662,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [organizationScopeHook] : []),
         ...(teamsScoped ? [teamScopeHook] : []),
-        ...(adminScoped ? [adminScopeHook(getSessionTenantId)] : []),
+        ...(adminScoped ? [adminScopeHook(getSessionTenantId, canAdministerTenant, adminSharedUsers)] : []),
         ...multiSessionHooks(getSessionTenantId, unboundSessions).before,
         ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).before : []),
         ...sso.before,
