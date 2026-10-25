@@ -4,7 +4,7 @@ import { createCookieGetter, getCookies } from "better-auth/cookies";
 import { tenantOrigin } from "./resolver.js";
 import { ERROR_CODES } from "./error-codes.js";
 import { assertTrustProxy } from "./proxy.js";
-import { assertPathPrefix } from "./path.js";
+import { assertPathPrefix, trimTrailingSlashes } from "./path.js";
 import { resolutionMode, resolveTenant, type TenantResolutionOptions } from "./tenant.js";
 
 export type { TenantErrorCode } from "./error-codes.js";
@@ -355,7 +355,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     if (resolved.source === "path") {
       // Links Better Auth builds (magic link, OAuth redirect URI, email
       // verification) come back to this tenant's prefix.
-      ctx.context.baseURL = `${ctx.context.baseURL.replace(/\/+$/, "")}${resolverOptions.pathPrefix}/${resolved.slug}`;
+      ctx.context.baseURL = `${trimTrailingSlashes(ctx.context.baseURL)}${resolverOptions.pathPrefix}/${resolved.slug}`;
     }
     if (tenantCookies) {
       const base = ctx.context.options;

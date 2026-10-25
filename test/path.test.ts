@@ -272,3 +272,14 @@ test("createTenantAuth serves path tenants, each from its own instance and datab
   assert.equal(unknown.status, 404);
   assert.equal(dbs.nope, undefined);
 });
+
+test("trailing slashes are trimmed without a backtracking regex", async () => {
+  const { trimTrailingSlashes } = await import("../src/path.js");
+  assert.equal(trimTrailingSlashes("/api/auth///"), "/api/auth");
+  assert.equal(trimTrailingSlashes("/"), "");
+  assert.equal(trimTrailingSlashes("http://example.com/api/auth"), "http://example.com/api/auth");
+  const long = `${"/".repeat(100_000)}x`;
+  const started = Date.now();
+  assert.equal(trimTrailingSlashes(long), long);
+  assert.ok(Date.now() - started < 100);
+});

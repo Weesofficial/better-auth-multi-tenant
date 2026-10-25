@@ -46,6 +46,13 @@ export function assertPathPrefix(prefix: string): void {
 
 export const DEFAULT_BASE_PATH = "/api/auth";
 
+/** `value` without trailing slashes. A loop rather than `/\/+$/`, which backtracks on long runs of `/`. */
+export function trimTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end--;
+  return value.slice(0, end);
+}
+
 /**
  * Split `<basePath><prefix>/<slug>/<route>` into the slug and the URL Better
  * Auth should see (`<basePath>/<route>`). `null` for any other path, including
@@ -53,7 +60,7 @@ export const DEFAULT_BASE_PATH = "/api/auth";
  */
 export function splitTenantPath(url: string, basePath: string, prefix: string): { slug: string; url: string } | null {
   const parsed = new URL(url);
-  const base = basePath === "/" ? "" : basePath.replace(/\/+$/, "");
+  const base = trimTrailingSlashes(basePath);
   const head = `${base}${prefix}/`;
   if (!parsed.pathname.startsWith(head)) return null;
   const rest = parsed.pathname.slice(head.length);
