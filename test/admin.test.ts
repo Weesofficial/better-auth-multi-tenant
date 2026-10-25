@@ -23,15 +23,15 @@ async function adminSetup(overrides: Partial<MultiTenantOptions> = { getOrganiza
     { id: "org_acme", name: "Acme", slug: "acme", createdAt: now },
     { id: "org_globex", name: "Globex", slug: "globex", createdAt: now },
   );
-  const join = (email: string, organizationId: string) => {
+  const join = (email: string, organizationId: string, role = "member") => {
     const userId = ctx.db.user!.find((u) => u.email === email)!.id as string;
-    ctx.db.member!.push({ id: `m_${email}_${organizationId}`, organizationId, userId, role: "member", createdAt: now });
+    ctx.db.member!.push({ id: `m_${email}_${organizationId}`, organizationId, userId, role, createdAt: now });
     return userId;
   };
 
   const adminCookie = await ctx.signUp("acme.example.com", "root@example.com");
   ctx.db.user!.find((u) => u.email === "root@example.com")!.role = "admin";
-  join("root@example.com", "org_acme");
+  join("root@example.com", "org_acme", "owner");
   await ctx.signUp("acme.example.com", "alice@example.com");
   const alice = join("alice@example.com", "org_acme");
   await ctx.signUp("globex.example.com", "bob@example.com");
@@ -131,8 +131,17 @@ test("revoke-user-session refuses another tenant's session token", async () => {
   assert.ok(db.session.find((s) => s.token === token));
 });
 
-test("a tenant with no organization has no members to manage", async () => {
+test("a tenant with no organization has no administrators", async () => {
   const { get, alice } = await adminSetup({ getOrganizationId: (t) => (t.slug === "globex" ? "org_globex" : null) });
+  await refused(await get("/admin/list-users"), "ADMIN_NOT_TENANT_ADMIN");
+  await refused(await get(`/admin/get-user?id=${alice}`), "ADMIN_NOT_TENANT_ADMIN");
+});
+
+test("a tenant with no organization has no members to manage, even for an allowed admin", async () => {
+  const { get, alice } = await adminSetup({
+    getOrganizationId: (t) => (t.slug === "globex" ? "org_globex" : null),
+    canAdministerTenant: () => true,
+  });
   const body = (await (await get("/admin/list-users")).json()) as { users: unknown[]; total: number };
   assert.equal(body.total, 0);
   await refused(await get(`/admin/get-user?id=${alice}`), "ADMIN_TENANT_MISMATCH");

@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Security
+
+Found in a pre-release review; each has a regression test in
+`test/security-review-0-6.test.ts`.
+
+- **The admin role no longer crosses tenants.** The new admin scoping checked
+  whom an admin route acted on, not who called it, and Better Auth's admin role
+  is global: an admin of one tenant could ban or reset the password of another
+  tenant's owner from that tenant's host. The caller now has to administer the
+  tenant (`canAdministerTenant`, default `organizationAdminsOnly`: an `owner` or
+  `admin` member of its organization), else `403 ADMIN_NOT_TENANT_ADMIN`.
+- **Admin changes to a user shared with another tenant are refused.**
+  `set-user-password`, `update-user`, `set-role`, `ban-user`, `unban-user` and
+  `remove-user` change the global user, so one tenant's admin could take over a
+  user's account on another tenant. They now refuse a user who belongs to another
+  organization (`403 ADMIN_SHARED_USER`); `adminSharedUsers: "allow"` restores
+  the old behaviour.
+- **Cross-tenant requests are refused** (`sameOriginOnly`, on by default). With
+  a wildcard `trustedOrigins`, a page on one tenant's subdomain could make
+  credentialed requests on another. State-changing requests from another
+  `Origin` now get `403 CROSS_TENANT_ORIGIN`.
+- **API keys in secondary storage stay bound.** With `apiKeys: true` and the
+  api-key plugin on `storage: "secondary-storage"`, keys were never stamped and
+  verified on every tenant. Key routes and `verifyApiKey` now check the key's
+  database row, and creating a key that has no row fails with
+  `500 API_KEY_NOT_IN_DATABASE`.
+- `allowHeaderOverride` logs a warning when `NODE_ENV` is `production`.
+
 ### Added
 
 - **Path-based tenancy.** `pathPrefix: "/t"` addresses a tenant as

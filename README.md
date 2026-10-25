@@ -146,6 +146,11 @@ Two things are up to you:
 2. **Trust the origin.** Add each custom domain to Better Auth's
    `trustedOrigins`, or its CSRF checks will refuse requests from it.
 
+Any host outside `baseDomain` reaches `getTenantByDomain`, so a client can make
+it query your database with made-up hosts. Wrap it in
+`cacheTenantLookup(..., { ttl, cacheMisses: true })` so repeated unknown hosts
+are answered from memory (see [Caching tenant lookups](#caching-tenant-lookups)).
+
 ## Choosing how tenants are addressed
 
 | Mode | Example | Option | Cookies | Pick it when |
@@ -493,10 +498,31 @@ tenant's members on its host (`admin`, on by default with
   and `revoke-user-session` refuses another tenant's session.
 - An impersonation session is bound to the tenant it was started on.
 
-Admin roles, bans and passwords are fields of the global user, so they still
-apply on every tenant: an admin is an admin everywhere, and a ban signs the user
-out of every tenant. `create-user` is not scoped; add the new user to the
-tenant's organization yourself. Without `getOrganizationId` the plugin logs a
+Better Auth's admin role is a field of the global user, so on its own it would
+make an admin of one tenant an admin of every tenant they can get a session on.
+On a tenant's host the caller must also administer that tenant
+(`canAdministerTenant`), else `403 ADMIN_NOT_TENANT_ADMIN`. The default,
+`organizationAdminsOnly`, accepts an `owner` or `admin` member of the tenant's
+organization; pass your own function for platform staff:
+
+```ts
+multiTenant({
+  // ...
+  canAdministerTenant: async (user, tenant, ctx) =>
+    user.email.endsWith("@yourcompany.com") || organizationAdminsOnly(user, tenant, ctx),
+});
+```
+
+Passwords, emails, roles and bans are global too, so changing them for a user who
+also belongs to another tenant would change them there as well: a password set
+by one tenant's admin would sign in as the user on the other tenant. The routes
+that do this (`set-user-password`, `update-user`, `set-role`, `ban-user`,
+`unban-user`, `remove-user`) refuse a user who is a member of any other
+organization with `403 ADMIN_SHARED_USER`. Session routes and impersonation
+still work for them. `adminSharedUsers: "allow"` lifts the refusal.
+
+`create-user` is not scoped; add the new user to the tenant's organization
+yourself. Without `getOrganizationId` the plugin logs a
 warning that admin routes are unscoped; `admin: false` turns the scoping and the
 warning off.
 
@@ -563,8 +589,11 @@ the tenant it was created on:
 - With `getOrganizationId`, creating or listing an organization's keys needs the
   tenant's organization (`403 ORGANIZATION_TENANT_MISMATCH`).
 
-Keys are stamped in the database, so the binding needs the plugin's default
-`storage: "database"`. Keys created before you turn it on have no tenant; re-issue
+Keys are stamped in the database, so the binding needs a database row for each
+key: the plugin's default `storage: "database"`, or `"secondary-storage"` with
+`fallbackToDatabase: true` (the checks read the row, not the cached copy). With
+secondary storage alone, creating a key on a tenant's host fails with
+`500 API_KEY_NOT_IN_DATABASE` rather than hand out a key bound to nothing. Keys created before you turn it on have no tenant; re-issue
 them, or set their `tenantId`. The plugin warns at startup when the api-key plugin
 is installed and `apiKeys` is not set.
 
@@ -633,6 +662,12 @@ your database adapter and the code in your callbacks must run there too.
 ## Security notes
 
 What the plugin enforces on a tenant's host:
+
+- A state-changing request whose `Origin` (or `Referer`) is another host is
+  refused (`403 CROSS_TENANT_ORIGIN`, `sameOriginOnly`). Tenant subdomains are
+  "same-site", so browsers send a tenant's cookies on requests from another
+  tenant's page, and a wildcard `trustedOrigins` such as `https://*.example.com`
+  lets them past Better Auth's CSRF check. OAuth and SAML callbacks are exempt.
 
 - A session from another tenant is refused (`403 CROSS_TENANT_SESSION`) whether
   it arrives as a cookie or as a bearer token from Better Auth's `bearer`
@@ -823,6 +858,9 @@ a database per tenant.
 | `getSSODomains` | — | `(tenant) => string[]`. Email domains a tenant owns, for SSO providers with no organization. Turns on the SSO checks. See [With `@better-auth/sso`](#with-better-authsso). |
 | `canAccessTenant` | — | `(user, tenant, { organizationId, adapter }) => boolean`. Refuses sessions for users the tenant does not let in (`TENANT_ACCESS_DENIED`). `organizationMembersOnly` is a ready one. See [Who may sign in to a tenant](#who-may-sign-in-to-a-tenant). |
 | `admin` | `true` with `getOrganizationId`, else `false` | Scope the `admin` plugin to the tenant's members and sessions. `true` without `getOrganizationId` throws at startup. See [Admin plugin](#admin-plugin). |
+| `canAdministerTenant` | `organizationAdminsOnly` | `(user, tenant, { organizationId, adapter }) => boolean`. Who may use the `admin` plugin on a tenant's host (`ADMIN_NOT_TENANT_ADMIN`). See [Admin plugin](#admin-plugin). |
+| `adminSharedUsers` | `"refuse"` | `"refuse"` stops admin routes that change the global user from touching a user who belongs to another organization too (`ADMIN_SHARED_USER`); `"allow"` lets them. |
+| `sameOriginOnly` | `true` | Refuse state-changing requests on a tenant's host from another origin (`CROSS_TENANT_ORIGIN`). Subdomain and custom-domain tenancy only. |
 | `apiKeys` | `false` | Bind `@better-auth/api-key` keys to the tenant they were created on (`apikey.tenantId`). See [API keys](#api-keys). |
 | `teams` | `true` with `getOrganizationId`, else `false` | Scope the organization plugin's team routes, `list-user-teams` and `activeTeamId` to the tenant's organization. `false` turns it off; `true` without `getOrganizationId` throws at startup. See [Teams](#teams). |
 | `sso` | `true` with `getOrganizationId` or `getSSODomains`, else `false` | Scope `@better-auth/sso` to the tenant's providers. `false` turns it off (no checks, no startup warning); `true` without either option throws at startup, and so does `false` with `ssoRequireTenantMapping`. |
@@ -869,6 +907,9 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | `TENANT_ACCESS_DENIED` | 403 | `canAccessTenant` did not let the user in; no session was created. |
 | `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or an organization, team, invitation or member route named another organization's (see `getOrganizationId`). |
 | `ADMIN_TENANT_MISMATCH` | 403 | An `admin` plugin route named a user who is not a member of the tenant's organization (see `admin`). |
+| `ADMIN_NOT_TENANT_ADMIN` | 403 | The caller of an `admin` plugin route does not administer the tenant (see `canAdministerTenant`). |
+| `ADMIN_SHARED_USER` | 403 | An admin route that changes the global user named a user who also belongs to another organization (see `adminSharedUsers`). |
+| `CROSS_TENANT_ORIGIN` | 403 | A state-changing request came from another host's page (see `sameOriginOnly`). |
 | `TEAM_TENANT_MISMATCH` | 403 | A team route or `activeTeamId` named a team of another tenant's organization. |
 | `VERIFICATION_TENANT_MISMATCH` | 403 | A code, token, nonce, challenge or pending cookie was issued on a different tenant, or carries no tenant stamp (see `bindVerifications`). |
 | `SSO_PROVIDER_TENANT_MISMATCH` | 403 | An SSO sign-in, registration, callback, SAML response or provider route reached a provider that does not belong to the tenant, or a SAML RelayState that was not handed out on this tenant (see `getSSODomains`, `ssoRequireTenantMapping`). |

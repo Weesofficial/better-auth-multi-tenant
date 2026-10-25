@@ -29,6 +29,22 @@ interface KeyAdapter {
   update: <T>(args: { model: string; where: Where; update: Record<string, unknown> }) => Promise<T | null>;
 }
 
+const keyNotFound = () => new APIError("NOT_FOUND", { code: "KEY_NOT_FOUND", message: "API Key not found" });
+
+const noDatabaseRow = () =>
+  new APIError("INTERNAL_SERVER_ERROR", {
+    code: "API_KEY_NOT_IN_DATABASE",
+    message:
+      "[better-auth-multi-tenant] apiKeys: true binds keys through their database row, and this key has none. " +
+      'Keep keys in the database (api-key storage: "database", or "secondary-storage" with fallbackToDatabase: true).',
+  });
+
+/** Whether the database row of key `id` is stamped with `tenantId`. */
+async function ownsKey(adapter: KeyAdapter, id: string, tenantId: string): Promise<boolean> {
+  const row = await adapter.findOne<{ tenantId?: string | null }>({ model: MODEL, where: [{ field: "id", value: id }] });
+  return row?.tenantId === tenantId;
+}
+
 /** Key routes whose lookups only see the tenant's keys on a tenant's host. */
 const SCOPED_PATHS = new Set(["/api-key/get", "/api-key/list", "/api-key/update", "/api-key/delete"]);
 
@@ -67,6 +83,13 @@ export const apiKeyHooks = (organizationScoped: boolean) => ({
         }
         if (ctx.path !== "/" && !SCOPED_PATHS.has(ctx.path)) return;
 
+        if (ctx.path === "/api-key/update" || ctx.path === "/api-key/delete") {
+          const keyId = (ctx.body as { keyId?: unknown } | undefined)?.keyId;
+          if (typeof keyId === "string" && !(await ownsKey(ctx.context.adapter as unknown as KeyAdapter, keyId, resolved.tenant.id))) {
+            throw keyNotFound();
+          }
+        }
+
         const adapter = ctx.context.adapter as unknown as KeyAdapter;
         const scope = (model: string, where: Where = []): Where =>
           model === MODEL ? [...where, { field: "tenantId", value: resolved.tenant.id }] : where;
@@ -91,11 +114,42 @@ export const apiKeyHooks = (organizationScoped: boolean) => ({
         const resolved = getTenantFromContext(ctx.context);
         const created = ctx.context.returned as { id?: unknown } | undefined;
         if (!resolved || !created || typeof created.id !== "string") return;
-        await (ctx.context.adapter as unknown as KeyAdapter).update({
+        const stamped = await (ctx.context.adapter as unknown as KeyAdapter).update({
           model: MODEL,
           where: [{ field: "id", value: created.id }],
           update: { tenantId: resolved.tenant.id },
         });
+        // No row to stamp: the key lives only in secondary storage, where this
+        // plugin cannot bind it. Fail loudly rather than hand out an unbound key.
+        if (!stamped) throw noDatabaseRow();
+      }),
+    },
+    {
+      // The checks below read the database row, so they hold when the api-key
+      // plugin reads keys from secondary storage too (`fallbackToDatabase`).
+      matcher: (ctx: { path?: string }) => pathless(ctx) || ctx.path === "/api-key/get" || ctx.path === "/api-key/list",
+      handler: createAuthMiddleware(async (ctx) => {
+        const resolved = getTenantFromContext(ctx.context);
+        const returned = ctx.context.returned as unknown;
+        if (!resolved || !returned || typeof returned !== "object" || returned instanceof Response) return;
+        const owned = (id: unknown) => typeof id === "string" && ownsKey(ctx.context.adapter as unknown as KeyAdapter, id, resolved.tenant.id);
+
+        if (ctx.path === "/api-key/list") {
+          const list = returned as { apiKeys?: { id?: unknown }[] } | { id?: unknown }[];
+          const keys = Array.isArray(list) ? list : list.apiKeys;
+          if (!Array.isArray(keys)) return;
+          const mine = (await Promise.all(keys.map(async (k) => ((await owned(k.id)) ? k : null)))).filter(Boolean);
+          if (mine.length === keys.length) return;
+          return ctx.json(Array.isArray(list) ? mine : { ...list, apiKeys: mine, total: mine.length });
+        }
+        if (ctx.path === "/api-key/get") {
+          if (!(await owned((returned as { id?: unknown }).id))) throw keyNotFound();
+          return;
+        }
+        // verifyApiKey
+        const result = returned as { valid?: boolean; key?: { id?: unknown } | null };
+        if (result.valid !== true || (await owned(result.key?.id))) return;
+        return ctx.json({ valid: false, error: { message: "Invalid API key.", code: "KEY_NOT_FOUND" }, key: null });
       }),
     },
   ],

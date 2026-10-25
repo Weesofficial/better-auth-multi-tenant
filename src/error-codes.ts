@@ -41,6 +41,18 @@ export const ERROR_CODES = {
     code: "ADMIN_TENANT_MISMATCH",
     message: "This user is not a member of this tenant",
   },
+  ADMIN_NOT_TENANT_ADMIN: {
+    code: "ADMIN_NOT_TENANT_ADMIN",
+    message: "You are not an administrator of this tenant",
+  },
+  ADMIN_SHARED_USER: {
+    code: "ADMIN_SHARED_USER",
+    message: "This user is also a member of another tenant, so this change cannot be made from here",
+  },
+  CROSS_TENANT_ORIGIN: {
+    code: "CROSS_TENANT_ORIGIN",
+    message: "This request came from a different origin than the tenant's",
+  },
   SSO_PROVIDER_TENANT_MISMATCH: {
     code: "SSO_PROVIDER_TENANT_MISMATCH",
     message: "This SSO provider does not belong to this tenant",
