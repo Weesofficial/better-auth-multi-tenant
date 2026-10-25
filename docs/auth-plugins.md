@@ -47,6 +47,10 @@ database shared by several instances, the binding refuses it.
 | `oneTap` | yes | A Google ID token proves identity to every tenant of the instance. | **Config needed** (`createTenantAuth` with a client id per tenant); single instance **upstream** |
 | `siwe` | yes | Nonce used on another tenant. The message `domain` is one value per instance. | **Fixed here** (nonce); per-tenant domain is **config needed** (`createTenantAuth`) |
 | `deviceAuthorization` | yes | A code approved on one tenant redeemed for a session on another. Codes live in their own `deviceCode` table, not as verification rows. | **Fixed here** with `deviceCodes: true` (test: `test/device-authorization.test.ts`) |
+| `jwt` | yes | Tokens of every tenant share one `iss` and `aud` (the `baseURL`), so a token minted on one tenant verified for every other. | **Fixed here**: a `tenantId` claim (`jwtTenantClaim`, needs `jwt({})`); verifiers must compare it (**config needed**) (test: `test/security-review-0-6-round2.test.ts`) |
+| `oneTimeToken` | yes | Token redeemed on another tenant. | **Fixed here** (a verification row) |
+| `@better-auth/oauth-provider`, `oidcProvider`, `mcp` | untested | Clients, consents and access tokens are global; an access token is not checked against the host's tenant. | **Not scoped**; startup warning. Use `createTenantAuth` to separate them |
+| `@better-auth/scim` | untested | SCIM connections and tokens work on every tenant's host. | **Not scoped**; startup warning. Use `createTenantAuth` to separate them |
 
 "Fixed here" means a failing test was written first and the fix lives in `src/`.
 Nothing in this plugin copies or patches Better Auth: it uses hooks,

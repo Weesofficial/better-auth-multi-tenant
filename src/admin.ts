@@ -37,6 +37,12 @@ export const adminSharedUser = () =>
     message: "This user is also a member of another tenant, so this change cannot be made from here",
   });
 
+export const adminRoleNotAssignable = () =>
+  new APIError("FORBIDDEN", {
+    code: "ADMIN_ROLE_NOT_ASSIGNABLE",
+    message: "Admin roles are global and cannot be given out from a tenant",
+  });
+
 export interface TenantAdminContext {
   /** The tenant's organization, when `getOrganizationId` is set. */
   organizationId?: string;
@@ -115,7 +121,9 @@ const TARGET_USER: Record<string, (ctx: { body?: unknown; query?: unknown }) => 
  * the admin role is global, and holding it must not make someone an admin of
  * every tenant. Routes that change the global user (password, email, role, ban,
  * removal) refuse a user who also belongs to another organization
- * (`ADMIN_SHARED_USER`), unless `sharedUsers` is `"allow"`.
+ * (`ADMIN_SHARED_USER`), unless `sharedUsers` is `"allow"`. `create-user` and
+ * `set-role` cannot give out one of the admin plugin's `adminRoles`
+ * (`ADMIN_ROLE_NOT_ASSIGNABLE`), unless `roleAssignment` is `"allow"`.
  *
  * A tenant with no organization has no members, so every one of these refuses.
  *
@@ -126,6 +134,7 @@ export const adminScopeHook = (
   getSessionTenantId: (session: unknown) => string | null | undefined,
   canAdminister: CanAdministerTenant = organizationAdminsOnly,
   sharedUsers: "refuse" | "allow" = "refuse",
+  roleAssignment: "refuse" | "allow" = "refuse",
 ) => ({
   matcher: (ctx: { path?: string }) => (ctx.path ?? "").startsWith("/admin/"),
   handler: createAuthMiddleware(async (ctx) => {
@@ -170,6 +179,17 @@ export const adminScopeHook = (
         where: [{ field: "userId", value: String(target) }],
       });
       if (memberships.some((m) => m.organizationId !== organizationId)) throw adminSharedUser();
+    }
+
+    if (roleAssignment === "refuse" && (path === "/admin/create-user" || path === "/admin/set-role")) {
+      const role = (ctx.body as { role?: unknown } | undefined)?.role;
+      const roles = (Array.isArray(role) ? role : typeof role === "string" ? role.split(",") : []).map((r) => String(r).trim());
+      const adminPlugin = (ctx.context.options.plugins ?? []).find((p: { id: string }) => p.id === "admin") as
+        | { options?: { adminRoles?: string | string[] } }
+        | undefined;
+      const configured = adminPlugin?.options?.adminRoles ?? ["admin"];
+      const adminRoles = (Array.isArray(configured) ? configured : configured.split(",")).map((r) => r.trim().toLowerCase());
+      if (roles.some((r) => adminRoles.includes(r.toLowerCase()))) throw adminRoleNotAssignable();
     }
 
     const ownSession = (session: unknown) => getSessionTenantId(session) === resolved.tenant.id;
