@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Path-based tenancy.** `pathPrefix: "/t"` addresses a tenant as
+  `/api/auth/t/acme/…`; wrap the instance in `withTenantPaths(auth)`. The prefix
+  comes off before Better Auth routes the request, so rate limits and
+  `disabledPaths` apply unchanged. Each tenant gets its own cookie names
+  (`tenantCookies`), links Better Auth builds come back under the tenant's prefix,
+  and `tenantPathRequest` names the tenant for `auth.api` calls. `createTenantAuth`
+  supports it too (with a new `basePath` option).
+- **Your own resolver.** `getTenantSlug({ headers, request, path })` picks the
+  tenant; the slug still passes `reserved` and `slugPattern`.
+- **`cacheTenantLookup`** puts an in-memory cache (with `ttl`, `maxSize`,
+  `cacheMisses` and `invalidate`) in front of `getTenant` or `getTenantByDomain`.
+- **`admin` plugin scoping** (`admin`, on by default with `getOrganizationId`).
+  On a tenant's host `list-users` lists the tenant organization's members only,
+  routes that name a user refuse anyone else with `403 ADMIN_TENANT_MISMATCH`,
+  and the admin session routes see the tenant's sessions only. Without
+  `getOrganizationId` the plugin warns that admin routes are unscoped.
+- **`multiSession` plugin scoping.** `list-device-sessions` returns the tenant's
+  sessions only; `set-active` and `revoke` refuse another tenant's session.
+- **`@better-auth/api-key` binding** (`apiKeys: true`, needs the new
+  `apikey.tenantId` column). Keys are stamped with the tenant they were created
+  on, refused as sessions on another tenant whichever order the plugins are in,
+  and hidden from the key routes of other tenants. With `getOrganizationId`,
+  organization keys must belong to the tenant's organization. The plugin warns
+  when the api-key plugin is installed and `apiKeys` is not set.
+- `checkSlug` is exported, for validating a slug from your own source.
+
+### Changed
+
+- With `getOrganizationId` and the `admin` plugin installed, admin routes on a
+  tenant's host are now scoped to its members. Set `admin: false` for the old
+  behaviour.
+- `baseDomain` is optional in the types; the plugin throws at startup unless
+  exactly one of `baseDomain`, `pathPrefix` and `getTenantSlug` is set, and when
+  subdomain-only options (`getTenantByDomain`, `allowHeaderOverride`,
+  `allowNestedSubdomains`, `trustProxy`) are combined with another mode.
+- The `TENANT_REQUIRED` message no longer mentions subdomains.
+
 ## 0.5.0
 
 ### Security
