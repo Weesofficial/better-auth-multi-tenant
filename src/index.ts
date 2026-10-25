@@ -30,6 +30,7 @@ import {
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { adminScopeHook } from "./admin.js";
+import { apiKeyHooks, apiKeySchema, bindApiKeySessions } from "./api-key.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { foreignSessionHook, setScopedHeaders, withoutCookies } from "./foreign-session.js";
 import { multiSessionHooks } from "./multi-session.js";
@@ -106,6 +107,18 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * is set, else `false`; `true` without `getOrganizationId` throws at startup.
    */
   admin?: boolean;
+  /**
+   * Bind `@better-auth/api-key` keys to the tenant they were created on. A key
+   * is stamped with `apikey.tenantId`; on a tenant's host the key routes only
+   * find that tenant's keys, and a key used as a session
+   * (`enableSessionForAPIKeys`) is refused on another tenant
+   * (`CROSS_TENANT_SESSION`) or without a stamp (`UNBOUND_SESSION`). With
+   * `getOrganizationId`, an organization's keys must be the tenant's
+   * organization's. Needs the column, so migrate when you turn it on. Defaults
+   * to `false`; the plugin warns at startup when the api-key plugin is installed
+   * and this is not set.
+   */
+  apiKeys?: boolean;
   /**
    * Scope `@better-auth/sso` to the tenant's providers. Defaults to `true` when
    * `getOrganizationId` or `getSSODomains` is set, else `false`. `false` leaves
@@ -208,6 +221,8 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
   tenantCookies?: boolean;
 }
 
+const RESOLVED = Symbol.for("better-auth-multi-tenant.resolved");
+
 /** Paths that legitimately run without a tenant-bound session. */
 const UNBOUND_PATHS = [
   "/sign-in",
@@ -280,6 +295,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getSSODomains,
     teams: _teams,
     admin: adminOption,
+    apiKeys,
     sso: ssoOption,
     ssoRequireTenantMapping = false,
     bindVerifications = true,
@@ -305,6 +321,64 @@ export const multiTenant = (options: MultiTenantOptions) => {
   const sso = ssoScoped
     ? ssoGuardHooks(getSSODomains)
     : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Better Auth's per-request AuthContext
+  type ResolveInput = { path?: string; headers?: Headers; request?: Request; context: any };
+  /**
+   * Resolve the request's tenant and set it up on the request's context, once
+   * per request. The first before hook calls it; so does the api-key session
+   * wrapper, which can run before that hook when its plugin is listed first.
+   */
+  const resolveRequest = async (ctx: ResolveInput): Promise<{ context: { headers: Headers } } | undefined> => {
+    const done = (ctx.context as Record<symbol, unknown>)[RESOLVED] as { scoped?: { context: { headers: Headers } } } | undefined;
+    if (done) return done.scoped;
+    const path = ctx.path ?? "";
+    const resolved = await resolveTenant(
+      { ...resolverOptions, getTenant, getTenantByDomain },
+      ctx.headers,
+      !requireTenant(path),
+      ctx.request,
+      path,
+    );
+    if (!resolved) {
+      (ctx.context as Record<symbol, unknown>)[RESOLVED] = {};
+      return;
+    }
+
+    const organizationId = getOrganizationId?.(resolved.tenant);
+    if (organizationId) resolved.organizationId = organizationId;
+
+    setTenantOnContext(ctx.context, resolved);
+    let scoped: { context: { headers: Headers } } | undefined;
+    // The context is this request's own copy, so these hold for every
+    // later hook and the endpoint, and for nothing else.
+    if (resolved.source === "path") {
+      // Links Better Auth builds (magic link, OAuth redirect URI, email
+      // verification) come back to this tenant's prefix.
+      ctx.context.baseURL = `${ctx.context.baseURL.replace(/\/+$/, "")}${resolverOptions.pathPrefix}/${resolved.slug}`;
+    }
+    if (tenantCookies) {
+      const base = ctx.context.options;
+      const tenantOptions = {
+        ...base,
+        advanced: { ...base.advanced, cookiePrefix: `${base.advanced?.cookiePrefix || "better-auth"}.${resolved.slug}` },
+      };
+          ctx.context.authCookies = getCookies(tenantOptions);
+          ctx.context.createAuthCookie = createCookieGetter(tenantOptions);
+          // Other tenants' cookies share this host. Hide them, so no plugin
+          // reading every cookie (multi-session lists them all) acts on them.
+          const shared = `${base.advanced?.cookiePrefix || "better-auth"}.`;
+          const own = `${shared}${resolved.slug}.`;
+          const unprefixed = (name: string) => name.replace(/^__(?:Secure|Host)-/, "");
+          const headers = withoutCookies(ctx.headers, (name) => unprefixed(name).startsWith(shared) && !unprefixed(name).startsWith(own));
+          if (headers.get("cookie") !== (ctx.headers?.get("cookie") ?? "")) {
+            setScopedHeaders(ctx.context, headers);
+            scoped = { context: { headers } };
+          }
+        }
+        await onTenantResolved?.(resolved, path);
+        return scoped;
+  };
 
   return {
     id: "multi-tenant",
@@ -334,6 +408,19 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ctx.logger.warn(
           "[better-auth-multi-tenant] the admin plugin is installed but getOrganizationId is not set, " +
             "so admin routes on a tenant's host list and act on every tenant's users. Set getOrganizationId to scope them, or admin: false to silence this.",
+        );
+      }
+
+      const apiKeyPlugin = ctx.options.plugins?.find((p) => p.id === "api-key");
+      if (apiKeys) {
+        if (!apiKeyPlugin) {
+          throw new Error("[better-auth-multi-tenant] apiKeys: true needs the @better-auth/api-key plugin.");
+        }
+        bindApiKeySessions(apiKeyPlugin, unboundSessions, resolveRequest);
+      } else if (apiKeys === undefined && apiKeyPlugin) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] @better-auth/api-key is installed but apiKeys is not set, so a key made on one tenant works on every other. " +
+            "Set apiKeys: true (and migrate the apikey.tenantId column) to bind keys to tenants, or apiKeys: false to silence this.",
         );
       }
 
@@ -414,6 +501,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         },
       },
       ...(bindVerifications ? verificationSchema : {}),
+      ...(apiKeys ? apiKeySchema : {}),
     },
 
     $ERROR_CODES: ERROR_CODES,
@@ -423,51 +511,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         {
           // Resolve on every request so downstream handlers can rely on it.
           matcher: () => true,
-          handler: createAuthMiddleware(async (ctx) => {
-            const path = ctx.path ?? "";
-            const resolved = await resolveTenant(
-              { ...resolverOptions, getTenant, getTenantByDomain },
-              ctx.headers,
-              !requireTenant(path),
-              ctx.request,
-              path,
-            );
-            if (!resolved) return;
-
-            const organizationId = getOrganizationId?.(resolved.tenant);
-            if (organizationId) resolved.organizationId = organizationId;
-
-            setTenantOnContext(ctx.context, resolved);
-            let scoped: { context: { headers: Headers } } | undefined;
-            // The context is this request's own copy, so these hold for every
-            // later hook and the endpoint, and for nothing else.
-            if (resolved.source === "path") {
-              // Links Better Auth builds (magic link, OAuth redirect URI, email
-              // verification) come back to this tenant's prefix.
-              ctx.context.baseURL = `${ctx.context.baseURL.replace(/\/+$/, "")}${resolverOptions.pathPrefix}/${resolved.slug}`;
-            }
-            if (tenantCookies) {
-              const base = ctx.context.options;
-              const tenantOptions = {
-                ...base,
-                advanced: { ...base.advanced, cookiePrefix: `${base.advanced?.cookiePrefix || "better-auth"}.${resolved.slug}` },
-              };
-              ctx.context.authCookies = getCookies(tenantOptions);
-              ctx.context.createAuthCookie = createCookieGetter(tenantOptions);
-              // Other tenants' cookies share this host. Hide them, so no plugin
-              // reading every cookie (multi-session lists them all) acts on them.
-              const shared = `${base.advanced?.cookiePrefix || "better-auth"}.`;
-              const own = `${shared}${resolved.slug}.`;
-              const unprefixed = (name: string) => name.replace(/^__(?:Secure|Host)-/, "");
-              const headers = withoutCookies(ctx.headers, (name) => unprefixed(name).startsWith(shared) && !unprefixed(name).startsWith(own));
-              if (headers.get("cookie") !== (ctx.headers?.get("cookie") ?? "")) {
-                setScopedHeaders(ctx.context, headers);
-                scoped = { context: { headers } };
-              }
-            }
-            await onTenantResolved?.(resolved, path);
-            return scoped;
-          }),
+          handler: createAuthMiddleware(async (ctx) => resolveRequest(ctx)),
         },
         {
           // The core isolation property: a session issued for tenant A must not
@@ -545,6 +589,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(teamsScoped ? [teamScopeHook] : []),
         ...(adminScoped ? [adminScopeHook(getSessionTenantId)] : []),
         ...multiSessionHooks(getSessionTenantId, unboundSessions).before,
+        ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).before : []),
         ...sso.before,
       ],
       after: [
@@ -571,6 +616,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(teamsScoped ? [teamListHook] : []),
         ...(getOrganizationId ? [invitationListHook] : []),
         ...multiSessionHooks(getSessionTenantId, unboundSessions).after,
+        ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).after : []),
         ...sso.after,
       ],
     },
