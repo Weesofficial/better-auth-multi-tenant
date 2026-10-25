@@ -1,17 +1,34 @@
 import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { getTenantFromContext } from "./context.js";
 
-/** A copy of `headers` without the named cookies. */
-export function withoutCookies(headers: Headers | undefined, names: string[]): Headers {
+/** A copy of `headers` without the named cookies, or without the cookies `drop` returns `true` for. */
+export function withoutCookies(headers: Headers | undefined, drop: string[] | ((name: string) => boolean)): Headers {
+  const dropped = typeof drop === "function" ? drop : (name: string) => drop.includes(name);
   const copy = new Headers(headers);
   copy.set(
     "cookie",
     (copy.get("cookie") ?? "")
       .split(/;\s*/)
-      .filter((pair) => pair && !names.some((name) => pair.startsWith(`${name}=`)))
+      .filter((pair) => pair && !dropped(pair.slice(0, pair.indexOf("=") >>> 0)))
       .join("; "),
   );
   return copy;
+}
+
+const SCOPED_HEADERS = Symbol.for("better-auth-multi-tenant.scopedHeaders");
+
+/**
+ * Remember the request's headers with other tenants' cookies removed, so a
+ * later hook that drops more cookies starts from them instead of from the
+ * original request (the last hook's headers win).
+ */
+export function setScopedHeaders(context: unknown, headers: Headers): void {
+  (context as Record<symbol, unknown>)[SCOPED_HEADERS] = headers;
+}
+
+/** The headers later hooks should start from: scoped ones if set, else the request's. */
+export function scopedHeaders(ctx: { headers?: Headers; context: unknown }): Headers | undefined {
+  return ((ctx.context as Record<symbol, unknown>)[SCOPED_HEADERS] as Headers | undefined) ?? ctx.headers;
 }
 
 /**
@@ -37,6 +54,8 @@ export const foreignSessionHook = (
     // getSessionFromCtx caches what it found on the shared context.
     (ctx.context as { session?: unknown }).session = null;
     const { sessionToken, sessionData } = ctx.context.authCookies;
-    return { context: { headers: withoutCookies(ctx.headers, [sessionToken.name, sessionData.name]) } };
+    const headers = withoutCookies(scopedHeaders(ctx), [sessionToken.name, sessionData.name]);
+    setScopedHeaders(ctx.context, headers);
+    return { context: { headers } };
   }),
 });

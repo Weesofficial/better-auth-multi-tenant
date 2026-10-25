@@ -31,7 +31,8 @@ import {
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { adminScopeHook } from "./admin.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
-import { foreignSessionHook } from "./foreign-session.js";
+import { foreignSessionHook, setScopedHeaders, withoutCookies } from "./foreign-session.js";
+import { multiSessionHooks } from "./multi-session.js";
 import { revokeScopeHook } from "./revoke.js";
 import { resolveScoping } from "./scoping.js";
 import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
@@ -437,6 +438,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
             if (organizationId) resolved.organizationId = organizationId;
 
             setTenantOnContext(ctx.context, resolved);
+            let scoped: { context: { headers: Headers } } | undefined;
             // The context is this request's own copy, so these hold for every
             // later hook and the endpoint, and for nothing else.
             if (resolved.source === "path") {
@@ -452,8 +454,19 @@ export const multiTenant = (options: MultiTenantOptions) => {
               };
               ctx.context.authCookies = getCookies(tenantOptions);
               ctx.context.createAuthCookie = createCookieGetter(tenantOptions);
+              // Other tenants' cookies share this host. Hide them, so no plugin
+              // reading every cookie (multi-session lists them all) acts on them.
+              const shared = `${base.advanced?.cookiePrefix || "better-auth"}.`;
+              const own = `${shared}${resolved.slug}.`;
+              const unprefixed = (name: string) => name.replace(/^__(?:Secure|Host)-/, "");
+              const headers = withoutCookies(ctx.headers, (name) => unprefixed(name).startsWith(shared) && !unprefixed(name).startsWith(own));
+              if (headers.get("cookie") !== (ctx.headers?.get("cookie") ?? "")) {
+                setScopedHeaders(ctx.context, headers);
+                scoped = { context: { headers } };
+              }
             }
             await onTenantResolved?.(resolved, path);
+            return scoped;
           }),
         },
         {
@@ -531,6 +544,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(getOrganizationId ? [organizationScopeHook] : []),
         ...(teamsScoped ? [teamScopeHook] : []),
         ...(adminScoped ? [adminScopeHook(getSessionTenantId)] : []),
+        ...multiSessionHooks(getSessionTenantId, unboundSessions).before,
         ...sso.before,
       ],
       after: [
@@ -556,6 +570,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         },
         ...(teamsScoped ? [teamListHook] : []),
         ...(getOrganizationId ? [invitationListHook] : []),
+        ...multiSessionHooks(getSessionTenantId, unboundSessions).after,
         ...sso.after,
       ],
     },

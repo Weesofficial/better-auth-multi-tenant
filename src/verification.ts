@@ -1,6 +1,6 @@
 import { APIError, createAuthMiddleware } from "better-auth/api";
 import { getTenantFromContext } from "./context.js";
-import { withoutCookies } from "./foreign-session.js";
+import { scopedHeaders, setScopedHeaders, withoutCookies } from "./foreign-session.js";
 
 /** `verification` columns the plugin adds when verification rows are bound to tenants. */
 export const verificationSchema = {
@@ -76,6 +76,8 @@ export const trustDeviceHook = {
     const row = (await ctx.context.internalAdapter.findVerificationValue(identifier)) as { tenantId?: string } | null;
     if (!row || row.tenantId === resolved.tenant.id) return;
 
-    return { context: { headers: withoutCookies(ctx.headers, [cookie]) } };
+    const headers = withoutCookies(scopedHeaders(ctx), [cookie]);
+    setScopedHeaders(ctx.context, headers);
+    return { context: { headers } };
   }),
 };
