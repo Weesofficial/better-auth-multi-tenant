@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+Found in a pre-release review; each has a regression test in
+`test/security-review-0-6.test.ts`.
+
+- **The admin role no longer crosses tenants.** The new admin scoping checked
+  whom an admin route acted on, not who called it, and Better Auth's admin role
+  is global: an admin of one tenant could ban or reset the password of another
+  tenant's owner from that tenant's host. The caller now has to administer the
+  tenant (`canAdministerTenant`, default `organizationAdminsOnly`: an `owner` or
+  `admin` member of its organization), else `403 ADMIN_NOT_TENANT_ADMIN`.
+- **Admin changes to a user shared with another tenant are refused.**
+  `set-user-password`, `update-user`, `set-role`, `ban-user`, `unban-user` and
+  `remove-user` change the global user, so one tenant's admin could take over a
+  user's account on another tenant. They now refuse a user who belongs to another
+  organization (`403 ADMIN_SHARED_USER`); `adminSharedUsers: "allow"` restores
+  the old behaviour.
+- **Cross-tenant requests are refused** (`sameOriginOnly`, on by default). With
+  a wildcard `trustedOrigins`, a page on one tenant's subdomain could make
+  credentialed requests on another. State-changing requests from another
+  `Origin` now get `403 CROSS_TENANT_ORIGIN`.
+- **API keys in secondary storage stay bound.** With `apiKeys: true` and the
+  api-key plugin on `storage: "secondary-storage"`, keys were never stamped and
+  verified on every tenant. Key routes and `verifyApiKey` now check the key's
+  database row, and creating a key that has no row fails with
+  `500 API_KEY_NOT_IN_DATABASE`.
+- `allowHeaderOverride` logs a warning when `NODE_ENV` is `production`.
+
+### Added
+
+- **Path-based tenancy.** `pathPrefix: "/t"` addresses a tenant as
+  `/api/auth/t/acme/…`; wrap the instance in `withTenantPaths(auth)`. The prefix
+  comes off before Better Auth routes the request, so rate limits and
+  `disabledPaths` apply unchanged. Each tenant gets its own cookie names
+  (`tenantCookies`), links Better Auth builds come back under the tenant's prefix,
+  and `tenantPathRequest` names the tenant for `auth.api` calls. `createTenantAuth`
+  supports it too (with a new `basePath` option).
+- **Your own resolver.** `getTenantSlug({ headers, request, path })` picks the
+  tenant; the slug still passes `reserved` and `slugPattern`.
+- **`cacheTenantLookup`** puts an in-memory cache (with `ttl`, `maxSize`,
+  `cacheMisses` and `invalidate`) in front of `getTenant` or `getTenantByDomain`.
+- **`admin` plugin scoping** (`admin`, on by default with `getOrganizationId`).
+  On a tenant's host `list-users` lists the tenant organization's members only,
+  routes that name a user refuse anyone else with `403 ADMIN_TENANT_MISMATCH`,
+  and the admin session routes see the tenant's sessions only. Without
+  `getOrganizationId` the plugin warns that admin routes are unscoped. A caller
+  with no session gets the admin plugin's own `401` before any membership check.
+- **`multiSession` plugin scoping.** `list-device-sessions` returns the tenant's
+  sessions only; `set-active` and `revoke` refuse another tenant's session.
+- **`@better-auth/api-key` binding** (`apiKeys: true`, needs the new
+  `apikey.tenantId` column). Keys are stamped with the tenant they were created
+  on, refused as sessions on another tenant whichever order the plugins are in,
+  and hidden from the key routes of other tenants and from
+  `auth.api.verifyApiKey` called with another tenant's headers. With `getOrganizationId`,
+  organization keys must belong to the tenant's organization. The plugin warns
+  when the api-key plugin is installed and `apiKeys` is not set.
+- `checkSlug` is exported, for validating a slug from your own source.
+
+### Changed
+
+- With `getOrganizationId` and the `admin` plugin installed, admin routes on a
+  tenant's host are now scoped to its members. Set `admin: false` for the old
+  behaviour.
+- `baseDomain` is optional in the types; the plugin throws at startup unless
+  exactly one of `baseDomain`, `pathPrefix` and `getTenantSlug` is set, and when
+  subdomain-only options (`getTenantByDomain`, `allowHeaderOverride`,
+  `allowNestedSubdomains`, `trustProxy`) are combined with another mode.
+- The `TENANT_REQUIRED` message no longer mentions subdomains.
+
 ## 0.5.0
 
 ### Security

@@ -5,7 +5,8 @@ import { assertTrustProxy } from "./proxy.js";
 import { multiTenant, type MultiTenantOptions } from "./index.js";
 import { tenantSessionHooks } from "./session-hooks.js";
 import { resolveScoping } from "./scoping.js";
-import { resolveTenant } from "./tenant.js";
+import { assertPathPrefix, DEFAULT_BASE_PATH, readdress, splitTenantPath, tenantPathRequest } from "./path.js";
+import { resolutionMode, resolveTenant } from "./tenant.js";
 
 export interface TenantAuthOptions extends Omit<MultiTenantOptions, "requireTenant"> {
   /**
@@ -26,6 +27,12 @@ export interface TenantAuthOptions extends Omit<MultiTenantOptions, "requireTena
    * waited for.
    */
   onEvict?: (tenant: Tenant, auth: Auth) => void | Promise<void>;
+  /**
+   * Where the instances are mounted, as Better Auth's `basePath`. With
+   * `pathPrefix` it is used to find the tenant in the URL and given to every
+   * instance. Defaults to `"/api/auth"`.
+   */
+  basePath?: string;
 }
 
 export interface TenantAuth {
@@ -65,11 +72,13 @@ export interface TenantAuth {
  * ```
  */
 export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
-  const { createAuth, maxSize, onEvict, ...pluginOptions } = options;
+  const { createAuth, maxSize, onEvict, basePath = DEFAULT_BASE_PATH, ...pluginOptions } = options;
   if (maxSize !== undefined && !(Number.isInteger(maxSize) && maxSize >= 1)) {
     throw new RangeError("createTenantAuth: maxSize must be a positive integer");
   }
   assertTrustProxy(pluginOptions.trustProxy);
+  const mode = resolutionMode(pluginOptions);
+  if (mode === "path") assertPathPrefix(pluginOptions.pathPrefix!);
 
   resolveScoping(pluginOptions); // Fail at startup, not on the first request.
 
@@ -86,8 +95,13 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
   const build = (tenant: Tenant) => {
     const entry = { tenant, auth: undefined as unknown as Auth };
     const userOptions = createAuth(tenant);
+    // The tenant is read off the URL before the instance exists, so both must agree on the base path.
+    if (mode === "path" && userOptions.basePath !== undefined && userOptions.basePath !== basePath) {
+      throw new Error(`createTenantAuth: createAuth returned basePath ${JSON.stringify(userOptions.basePath)}; set basePath on createTenantAuth instead.`);
+    }
     const options: BetterAuthOptions = {
       ...userOptions,
+      ...(mode === "path" ? { basePath } : {}),
       plugins: [
         // Binds this instance to its tenant, so a session or token copied to
         // another host is still refused, whatever the database holds.
@@ -111,8 +125,14 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
     return entry;
   };
 
+  const routeOf = (request?: Request) => {
+    if (!request) return "";
+    const { pathname } = new URL(request.url);
+    return pathname.startsWith(`${basePath}/`) ? pathname.slice(basePath.length) : pathname;
+  };
+
   const getAuth = async (headers: Headers, request?: Request) => {
-    const resolved = await resolveTenant(pluginOptions, headers, false, request);
+    const resolved = await resolveTenant(pluginOptions, headers, false, request, routeOf(request));
     const { tenant } = resolved!; // `optional: false` never returns null.
 
     let entry = cache.get(tenant.id);
@@ -133,6 +153,10 @@ export function createTenantAuth(options: TenantAuthOptions): TenantAuth {
   return {
     getAuth,
     async handler(request) {
+      if (mode === "path") {
+        const split = splitTenantPath(request.url, basePath, pluginOptions.pathPrefix!);
+        if (split) request = tenantPathRequest(readdress(request, split.url), split.slug);
+      }
       let auth: Auth;
       try {
         auth = await getAuth(request.headers, request);

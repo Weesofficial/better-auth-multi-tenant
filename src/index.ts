@@ -1,9 +1,12 @@
 import { APIError, createAuthEndpoint, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import type { BetterAuthPlugin } from "better-auth";
-import { tenantOrigin, type ResolverOptions } from "./resolver.js";
+import { createCookieGetter, getCookies } from "better-auth/cookies";
+import { tenantOrigin } from "./resolver.js";
 import { ERROR_CODES } from "./error-codes.js";
-import { assertTrustProxy } from "./proxy.js";
-import { resolveTenant } from "./tenant.js";
+import { assertTrustProxy, requestHost } from "./proxy.js";
+import { normalizeHost } from "./resolver.js";
+import { assertPathPrefix, trimTrailingSlashes } from "./path.js";
+import { resolutionMode, resolveTenant, type TenantResolutionOptions } from "./tenant.js";
 
 export type { TenantErrorCode } from "./error-codes.js";
 export { requestHost } from "./proxy.js";
@@ -11,6 +14,7 @@ export type { ProxyRequest, RequestHost, TrustProxy } from "./proxy.js";
 
 export {
   resolveTenantSlug,
+  checkSlug,
   normalizeHost,
   tenantOrigin,
   DEFAULT_RESERVED,
@@ -26,8 +30,11 @@ import {
   type Tenant,
 } from "./context.js";
 import { tenantAccessHook, type CanAccessTenant } from "./access.js";
+import { adminScopeHook, type CanAdministerTenant } from "./admin.js";
+import { apiKeyHooks, apiKeySchema, bindApiKeySessions } from "./api-key.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
-import { foreignSessionHook } from "./foreign-session.js";
+import { foreignSessionHook, setScopedHeaders, withoutCookies } from "./foreign-session.js";
+import { multiSessionHooks } from "./multi-session.js";
 import { revokeScopeHook } from "./revoke.js";
 import { resolveScoping } from "./scoping.js";
 import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
@@ -37,13 +44,19 @@ import { trustDeviceHook, verificationBindingHooks, verificationSchema } from ".
 export { getTenantFromContext, requireTenantFromContext } from "./context.js";
 export type { ResolvedTenant, Tenant } from "./context.js";
 export { organizationMembersOnly } from "./access.js";
+export { organizationAdminsOnly } from "./admin.js";
+export type { CanAdministerTenant, TenantAdminContext } from "./admin.js";
 export type { CanAccessTenant, TenantAccessContext } from "./access.js";
 export { createTenantAuth } from "./tenant-auth.js";
 export type { TenantAuth, TenantAuthOptions } from "./tenant-auth.js";
 export { tenantSessionHooks } from "./session-hooks.js";
+export { cacheTenantLookup } from "./cache.js";
+export { withTenantPaths, tenantPathRequest } from "./path.js";
+export type { TenantResolutionOptions, TenantSlugRequest } from "./tenant.js";
+export type { CachedTenantLookup, TenantCacheOptions } from "./cache.js";
 export type { TenantSessionHookOptions } from "./session-hooks.js";
 
-export interface MultiTenantOptions extends ResolverOptions {
+export interface MultiTenantOptions extends TenantResolutionOptions {
   /**
    * Look up a tenant by slug. Return `null` for unknown slugs — the plugin
    * turns that into a 404. An inactive tenant is a 403 instead, so return
@@ -89,6 +102,55 @@ export interface MultiTenantOptions extends ResolverOptions {
    * `true` without `getOrganizationId` throws at startup.
    */
   teams?: boolean;
+  /**
+   * Scope Better Auth's `admin` plugin to the tenant's organization: on a
+   * tenant's host, `list-users` lists its members only, routes that name a user
+   * refuse anyone else (`ADMIN_TENANT_MISMATCH`), and the admin session routes
+   * see the tenant's sessions only. Defaults to `true` when `getOrganizationId`
+   * is set, else `false`; `true` without `getOrganizationId` throws at startup.
+   */
+  admin?: boolean;
+  /**
+   * Who may use the `admin` plugin's routes on a tenant's host, on top of the
+   * admin plugin's own role check. Better Auth's admin role is global, so
+   * without this an admin of one tenant administers every tenant they can get a
+   * session on. Defaults to {@link organizationAdminsOnly}: an `owner` or
+   * `admin` member of the tenant's organization. Anyone else gets
+   * `403 ADMIN_NOT_TENANT_ADMIN`; a check that throws refuses too.
+   */
+  canAdministerTenant?: CanAdministerTenant;
+  /**
+   * Admin routes that change the global user (`set-user-password`,
+   * `update-user`, `set-role`, `ban-user`, `unban-user`, `remove-user`) also
+   * change it on every other tenant the user belongs to: a password or email set
+   * on one tenant signs in on the others. `"refuse"` (the default) refuses them
+   * for a user who is also a member of another organization
+   * (`403 ADMIN_SHARED_USER`); `"allow"` lets them through.
+   */
+  adminSharedUsers?: "refuse" | "allow";
+  /**
+   * Refuse a request on a tenant's host whose `Origin` (or, without one,
+   * `Referer`) is another host, with `403 CROSS_TENANT_ORIGIN`. Tenant
+   * subdomains are "same-site" to each other, so cookies travel between them
+   * and a wildcard `trustedOrigins` such as `https://*.example.com` passes
+   * Better Auth's CSRF check: without this, a page on one tenant's subdomain can
+   * act as the signed-in user on another. Safe methods and the OAuth / SAML
+   * callback routes are exempt. Defaults to `true` for subdomain and
+   * custom-domain tenancy; path tenancy shares one host and is unaffected.
+   */
+  sameOriginOnly?: boolean;
+  /**
+   * Bind `@better-auth/api-key` keys to the tenant they were created on. A key
+   * is stamped with `apikey.tenantId`; on a tenant's host the key routes only
+   * find that tenant's keys, and a key used as a session
+   * (`enableSessionForAPIKeys`) is refused on another tenant
+   * (`CROSS_TENANT_SESSION`) or without a stamp (`UNBOUND_SESSION`). With
+   * `getOrganizationId`, an organization's keys must be the tenant's
+   * organization's. Needs the column, so migrate when you turn it on. Defaults
+   * to `false`; the plugin warns at startup when the api-key plugin is installed
+   * and this is not set.
+   */
+  apiKeys?: boolean;
   /**
    * Scope `@better-auth/sso` to the tenant's providers. Defaults to `true` when
    * `getOrganizationId` or `getSSODomains` is set, else `false`. `false` leaves
@@ -182,7 +244,16 @@ export interface MultiTenantOptions extends ResolverOptions {
   port?: number;
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
+  /**
+   * Give every tenant its own cookie names (`better-auth.acme.session_token`),
+   * so one browser can be signed in to several tenants on the same host.
+   * Defaults to `true` with `pathPrefix` and `false` otherwise; subdomains
+   * already keep their cookies apart.
+   */
+  tenantCookies?: boolean;
 }
+
+const RESOLVED = Symbol.for("better-auth-multi-tenant.resolved");
 
 /** Paths that legitimately run without a tenant-bound session. */
 const UNBOUND_PATHS = [
@@ -198,6 +269,19 @@ const UNBOUND_PATHS = [
   "/error",
   "/ok",
 ];
+
+/** POST callbacks from an identity provider, which come from the provider's origin. */
+const PROVIDER_CALLBACKS = ["/callback", "/oauth2/callback", "/sso/callback", "/sso/saml2/sp/acs", "/sso/saml2/callback"];
+const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
+
+/** The host of an `Origin` or `Referer` value; `""` for `null` or anything unparsable. */
+function hostOfUrl(value: string): string {
+  try {
+    return normalizeHost(new URL(value).host);
+  } catch {
+    return "";
+  }
+}
 
 // Match whole path segments, so `/sign-in/email` is an entry point but
 // `/sign-in-as-admin` or `/okta` is not.
@@ -255,6 +339,11 @@ export const multiTenant = (options: MultiTenantOptions) => {
     getOrganizationId,
     getSSODomains,
     teams: _teams,
+    admin: adminOption,
+    canAdministerTenant,
+    adminSharedUsers = "refuse",
+    sameOriginOnly = true,
+    apiKeys,
     sso: ssoOption,
     ssoRequireTenantMapping = false,
     bindVerifications = true,
@@ -268,17 +357,81 @@ export const multiTenant = (options: MultiTenantOptions) => {
     protocol,
     port,
     onTenantResolved,
+    tenantCookies: tenantCookiesOption,
     ...resolverOptions
   } = options;
   assertTrustProxy(resolverOptions.trustProxy);
+  const mode = resolutionMode(options);
+  if (mode === "path") assertPathPrefix(resolverOptions.pathPrefix!);
+  const tenantCookies = tenantCookiesOption ?? mode === "path";
 
-  const { hasSSOMapping, teamsScoped, ssoScoped } = resolveScoping(options);
+  const { hasSSOMapping, teamsScoped, adminScoped, ssoScoped } = resolveScoping(options);
   const sso = ssoScoped
     ? ssoGuardHooks(getSSODomains)
     : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Better Auth's per-request AuthContext
+  type ResolveInput = { path?: string; headers?: Headers; request?: Request; context: any };
+  /**
+   * Resolve the request's tenant and set it up on the request's context, once
+   * per request. The first before hook calls it; so does the api-key session
+   * wrapper, which can run before that hook when its plugin is listed first.
+   */
+  const resolveRequest = async (ctx: ResolveInput): Promise<{ context: { headers: Headers } } | undefined> => {
+    const done = (ctx.context as Record<symbol, unknown>)[RESOLVED] as { scoped?: { context: { headers: Headers } } } | undefined;
+    if (done) return done.scoped;
+    const path = ctx.path ?? "";
+    const resolved = await resolveTenant(
+      { ...resolverOptions, getTenant, getTenantByDomain },
+      ctx.headers,
+      !requireTenant(path),
+      ctx.request,
+      path,
+    );
+    if (!resolved) {
+      (ctx.context as Record<symbol, unknown>)[RESOLVED] = {};
+      return;
+    }
+
+    const organizationId = getOrganizationId?.(resolved.tenant);
+    if (organizationId) resolved.organizationId = organizationId;
+
+    setTenantOnContext(ctx.context, resolved);
+    let scoped: { context: { headers: Headers } } | undefined;
+    // The context is this request's own copy, so these hold for every
+    // later hook and the endpoint, and for nothing else.
+    if (resolved.source === "path") {
+      // Links Better Auth builds (magic link, OAuth redirect URI, email
+      // verification) come back to this tenant's prefix.
+      ctx.context.baseURL = `${trimTrailingSlashes(ctx.context.baseURL)}${resolverOptions.pathPrefix}/${resolved.slug}`;
+    }
+    if (tenantCookies) {
+      const base = ctx.context.options;
+      const tenantOptions = {
+        ...base,
+        advanced: { ...base.advanced, cookiePrefix: `${base.advanced?.cookiePrefix || "better-auth"}.${resolved.slug}` },
+      };
+          ctx.context.authCookies = getCookies(tenantOptions);
+          ctx.context.createAuthCookie = createCookieGetter(tenantOptions);
+          // Other tenants' cookies share this host. Hide them, so no plugin
+          // reading every cookie (multi-session lists them all) acts on them.
+          const shared = `${base.advanced?.cookiePrefix || "better-auth"}.`;
+          const own = `${shared}${resolved.slug}.`;
+          const unprefixed = (name: string) => name.replace(/^__(?:Secure|Host)-/, "");
+          const headers = withoutCookies(ctx.headers, (name) => unprefixed(name).startsWith(shared) && !unprefixed(name).startsWith(own));
+          if (headers.get("cookie") !== (ctx.headers?.get("cookie") ?? "")) {
+            setScopedHeaders(ctx.context, headers);
+            scoped = { context: { headers } };
+          }
+        }
+        await onTenantResolved?.(resolved, path);
+        return scoped;
+  };
+
   return {
     id: "multi-tenant",
+    // Read by `withTenantPaths`.
+    options: { pathPrefix: resolverOptions.pathPrefix },
 
     init(ctx) {
       // One apex-domain cookie for every tenant: the cross-tenant check still
@@ -292,10 +445,37 @@ export const multiTenant = (options: MultiTenantOptions) => {
         );
       }
 
+      if (resolverOptions.allowHeaderOverride && (globalThis as { process?: { env?: Record<string, string | undefined> } }).process?.env?.NODE_ENV === "production") {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] allowHeaderOverride is on in production, so any client can pick its tenant by sending the " +
+            `${resolverOptions.headerName ?? "x-tenant"} header. Use it for local development only.`,
+        );
+      }
+
       if (bindVerifications && ctx.options.secondaryStorage && !ctx.options.verification?.storeInDatabase) {
         ctx.logger.warn(
           "[better-auth-multi-tenant] verification rows live only in secondaryStorage, where Better Auth runs no database hooks, " +
             "so codes and tokens are not bound to the tenant that issued them. Set verification.storeInDatabase: true to enforce bindVerifications.",
+        );
+      }
+
+      if (adminOption !== false && !adminScoped && ctx.options.plugins?.some((p) => p.id === "admin")) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] the admin plugin is installed but getOrganizationId is not set, " +
+            "so admin routes on a tenant's host list and act on every tenant's users. Set getOrganizationId to scope them, or admin: false to silence this.",
+        );
+      }
+
+      const apiKeyPlugin = ctx.options.plugins?.find((p) => p.id === "api-key");
+      if (apiKeys) {
+        if (!apiKeyPlugin) {
+          throw new Error("[better-auth-multi-tenant] apiKeys: true needs the @better-auth/api-key plugin.");
+        }
+        bindApiKeySessions(apiKeyPlugin, unboundSessions, resolveRequest);
+      } else if (apiKeys === undefined && apiKeyPlugin) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] @better-auth/api-key is installed but apiKeys is not set, so a key made on one tenant works on every other. " +
+            "Set apiKeys: true (and migrate the apikey.tenantId column) to bind keys to tenants, or apiKeys: false to silence this.",
         );
       }
 
@@ -376,6 +556,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         },
       },
       ...(bindVerifications ? verificationSchema : {}),
+      ...(apiKeys ? apiKeySchema : {}),
     },
 
     $ERROR_CODES: ERROR_CODES,
@@ -385,22 +566,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         {
           // Resolve on every request so downstream handlers can rely on it.
           matcher: () => true,
-          handler: createAuthMiddleware(async (ctx) => {
-            const path = ctx.path ?? "";
-            const resolved = await resolveTenant(
-              { ...resolverOptions, getTenant, getTenantByDomain },
-              ctx.headers,
-              !requireTenant(path),
-              ctx.request,
-            );
-            if (!resolved) return;
-
-            const organizationId = getOrganizationId?.(resolved.tenant);
-            if (organizationId) resolved.organizationId = organizationId;
-
-            setTenantOnContext(ctx.context, resolved);
-            await onTenantResolved?.(resolved, path);
-          }),
+          handler: createAuthMiddleware(async (ctx) => resolveRequest(ctx)),
         },
         {
           // The core isolation property: a session issued for tenant A must not
@@ -436,6 +602,26 @@ export const multiTenant = (options: MultiTenantOptions) => {
                 });
               }
             }
+          }),
+        },
+        {
+          // Tenant subdomains are same-site, so cookies cross between them and a
+          // wildcard trustedOrigins accepts any of them. Only the tenant's own
+          // host may make a state-changing request here.
+          matcher: (ctx) =>
+            sameOriginOnly &&
+            !PROVIDER_CALLBACKS.some((p) => ctx.path === p || (ctx.path ?? "").startsWith(`${p}/`)),
+          handler: createAuthMiddleware(async (ctx) => {
+            const resolved = getTenantFromContext(ctx.context);
+            if (!resolved || (resolved.source !== "host" && resolved.source !== "custom-domain")) return;
+            const method = (ctx.request?.method ?? ctx.method ?? "GET").toUpperCase();
+            if (SAFE_METHODS.has(method)) return;
+            const source = ctx.headers?.get("origin") ?? ctx.headers?.get("referer");
+            // No Origin or Referer: a server-side call, or Better Auth's own check refuses it.
+            if (source == null) return;
+            const host = requestHost({ headers: ctx.headers!, request: ctx.request }, resolverOptions.trustProxy);
+            if (host.ok && hostOfUrl(source) === normalizeHost(host.host)) return;
+            throw new APIError("FORBIDDEN", ERROR_CODES.CROSS_TENANT_ORIGIN);
           }),
         },
         {
@@ -476,6 +662,9 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [organizationScopeHook] : []),
         ...(teamsScoped ? [teamScopeHook] : []),
+        ...(adminScoped ? [adminScopeHook(getSessionTenantId, canAdministerTenant, adminSharedUsers)] : []),
+        ...multiSessionHooks(getSessionTenantId, unboundSessions).before,
+        ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).before : []),
         ...sso.before,
       ],
       after: [
@@ -501,6 +690,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
         },
         ...(teamsScoped ? [teamListHook] : []),
         ...(getOrganizationId ? [invitationListHook] : []),
+        ...multiSessionHooks(getSessionTenantId, unboundSessions).after,
+        ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).after : []),
         ...sso.after,
       ],
     },
@@ -511,12 +702,15 @@ export const multiTenant = (options: MultiTenantOptions) => {
         { method: "GET" },
         async (ctx) => {
           const resolved = requireTenantFromContext(ctx.context);
+          const { baseDomain } = resolverOptions;
           return ctx.json({
             id: resolved.tenant.id,
             slug: resolved.slug,
             origin: resolved.domain
               ? `${protocol ?? "https"}://${resolved.domain}${port ? `:${port}` : ""}`
-              : tenantOrigin(resolved.slug, { ...resolverOptions, protocol, port }),
+              : baseDomain && resolved.source !== "path"
+                ? tenantOrigin(resolved.slug, { baseDomain, protocol, port })
+                : new URL(ctx.context.baseURL).origin,
           });
         },
       ),

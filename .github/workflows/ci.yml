@@ -32,7 +32,7 @@ jobs:
       - run: npm ci
       # Not --no-save: npm 10 crashes on it (Cannot read properties of null, edgesOut).
       - if: matrix.deps != 'lockfile'
-        run: npm install --no-audit --no-fund --legacy-peer-deps better-auth@${{ matrix.deps }} @better-auth/sso@${{ matrix.deps }}
+        run: npm install --no-audit --no-fund --legacy-peer-deps better-auth@${{ matrix.deps }} @better-auth/sso@${{ matrix.deps }} @better-auth/api-key@${{ matrix.deps }}
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

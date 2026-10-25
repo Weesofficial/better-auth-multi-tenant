@@ -5,10 +5,12 @@
 [![CI](https://github.com/Weesofficial/better-auth-multi-tenant/actions/workflows/ci.yml/badge.svg)](https://github.com/Weesofficial/better-auth-multi-tenant/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
 
-Subdomain-based multi-tenancy for [Better Auth](https://better-auth.com).
+Multi-tenancy for [Better Auth](https://better-auth.com), by subdomain, custom
+domain or path.
 
-Resolves `acme.example.com` to a tenant, binds sessions to the tenant they were
-issued for, and refuses a session that shows up on another tenant's host.
+Resolves `acme.example.com` (or `app.acme.com`, or `example.com/…/t/acme`) to a
+tenant, binds sessions to the tenant they were issued for, and refuses a session
+that shows up on another tenant.
 
 ```bash
 npm install better-auth-multi-tenant
@@ -143,6 +145,123 @@ Two things are up to you:
    record. Whoever controls the mapping controls which tenant a domain serves.
 2. **Trust the origin.** Add each custom domain to Better Auth's
    `trustedOrigins`, or its CSRF checks will refuse requests from it.
+
+Any host outside `baseDomain` reaches `getTenantByDomain`, so a client can make
+it query your database with made-up hosts. Wrap it in
+`cacheTenantLookup(..., { ttl, cacheMisses: true })` so repeated unknown hosts
+are answered from memory (see [Caching tenant lookups](#caching-tenant-lookups)).
+
+## Choosing how tenants are addressed
+
+| Mode | Example | Option | Cookies | Pick it when |
+| --- | --- | --- | --- | --- |
+| Subdomain | `acme.example.com` | `baseDomain` | Apart by host | Most SaaS apps. Needs wildcard DNS and TLS. |
+| Custom domain | `app.acme.com` | `getTenantByDomain` (with `baseDomain`) | Apart by host | Customers bring their own domain. You verify ownership. |
+| Path | `example.com/api/auth/t/acme/…` | `pathPrefix` | One name per tenant (`tenantCookies`) | One host for everyone: no wildcard DNS, an early product, an internal tool. |
+| Your own | anything on the request | `getTenantSlug` | Apart by host, or `tenantCookies` | None of the above fits. |
+
+Set exactly one of `baseDomain`, `pathPrefix` and `getTenantSlug`; the plugin
+throws at startup otherwise. Session binding, `canAccessTenant`, the
+verification binding, teams, SSO, admin and API keys work the same in every mode.
+
+## Path-based tenants
+
+With `pathPrefix`, a tenant is named in the auth URL:
+`/api/auth/t/acme/sign-in/email` is the `/sign-in/email` route for `acme`.
+Wrap the instance in `withTenantPaths`, which takes the prefix off before Better
+Auth sees the request, and point each tenant's client at its own base URL:
+
+```ts
+import { betterAuth } from "better-auth";
+import { multiTenant, organizationMembersOnly, tenantSessionHooks, withTenantPaths } from "better-auth-multi-tenant";
+
+export const auth = withTenantPaths(
+  betterAuth({
+    plugins: [
+      multiTenant({
+        pathPrefix: "/t",
+        getTenant: (slug) => db.tenant.findUnique({ where: { slug } }),
+        getOrganizationId: (tenant) => tenant.organizationId,
+        canAccessTenant: organizationMembersOnly,
+      }),
+    ],
+    databaseHooks: tenantSessionHooks(),
+  }),
+);
+
+// In the browser, on /acme/…
+const authClient = createAuthClient({ baseURL: `${location.origin}/api/auth/t/${slug}` });
+```
+
+- **Pass the wrapped `auth` everywhere** you would pass `auth`, including
+  `toNodeHandler(auth)` and `svelteKitHandler({ auth })`. Without it, prefixed
+  URLs are `404` and unprefixed ones are `400 TENANT_REQUIRED`.
+- **Rate limits and `disabledPaths` see the route without the prefix**, so
+  Better Auth's sign-in limit is one bucket across all tenants, not one per tenant.
+- **Each tenant gets its own cookie names** (`better-auth.acme.session_token`),
+  so one browser can be signed in to several tenants at once, and other tenants'
+  cookies are hidden from the request. If you read the cookie yourself (Next.js
+  middleware), pass `cookiePrefix: "better-auth.acme"` to `getSessionCookie`.
+- **Links follow the tenant.** Magic links, email verification and OAuth
+  redirect URIs are built under `/api/auth/t/<slug>`, so register each
+  tenant's redirect URI with your OAuth providers (or use one provider app per
+  tenant with `createTenantAuth`).
+- **The URL is chosen by the client**, unlike a host backed by DNS. Session
+  binding still refuses another tenant's session, but anyone can sign in to any
+  tenant unless you set `canAccessTenant`. Set it.
+- **Server code** that calls `auth.api` for a page under `/acme/…` names the
+  tenant with `tenantPathRequest`:
+
+  ```ts
+  const session = await auth.api.getSession({
+    headers: request.headers,
+    request: tenantPathRequest(request, params.tenant),
+    asResponse: false,
+  });
+  ```
+
+`createTenantAuth` takes `pathPrefix` too (and `basePath`, default `/api/auth`);
+its `handler` does the unwrapping itself.
+
+## Your own resolver
+
+`getTenantSlug` decides the tenant from anything on the request. It gets
+`{ headers, request, path }` and returns a slug or `null`; the slug still has to
+pass `reserved` and `slugPattern`:
+
+```ts
+multiTenant({
+  // Set by your edge middleware, which strips any copy the client sent.
+  getTenantSlug: ({ headers }) => headers.get("x-internal-tenant"),
+  getTenant,
+  canAccessTenant: organizationMembersOnly,
+})
+```
+
+Read only what the client cannot choose, or rely on `canAccessTenant`. Set
+`baseDomain` as well if `/multi-tenant/current` should report subdomain origins,
+and `tenantCookies: true` if tenants share a host.
+
+## Caching tenant lookups
+
+`getTenant` runs on every request, `get-session` included. Put
+`cacheTenantLookup` in front of it (or of `getTenantByDomain`):
+
+```ts
+import { cacheTenantLookup } from "better-auth-multi-tenant";
+
+const getTenant = cacheTenantLookup((slug) => db.tenant.findUnique({ where: { slug } }), { ttl: 60_000 });
+multiTenant({ baseDomain: "example.com", getTenant });
+
+// After you suspend, delete or rename a tenant:
+getTenant.invalidate(tenant.id); // or a slug, or nothing for everything
+```
+
+The cache lives in the process (or isolate), shares one lookup between
+concurrent requests for the same slug, and keeps 1000 entries by default
+(`maxSize`). Unknown slugs are not cached unless you set `cacheMisses: true`. A
+change you make to a tenant applies after at most `ttl`, or at once with
+`invalidate`.
 
 ## With the `organization` plugin
 
@@ -362,6 +481,51 @@ through public hooks:
 `GET /sso/providers` lists only the tenant's providers (the same ownership rule
 as above). Without `getOrganizationId` or `getSSODomains` it is unfiltered.
 
+### Admin plugin
+
+With `getOrganizationId`, Better Auth's
+[`admin` plugin](https://www.better-auth.com/docs/plugins/admin) only reaches the
+tenant's members on its host (`admin`, on by default with
+`getOrganizationId`):
+
+- `/admin/list-users` lists and counts members of the tenant's organization only,
+  with the caller's search and filters applied on top.
+- A route that names a user (`get-user`, `set-role`, `update-user`, `ban-user`,
+  `unban-user`, `impersonate-user`, `remove-user`, `set-user-password`,
+  `list-user-sessions`, `revoke-user-sessions`) refuses anyone else with
+  `403 ADMIN_TENANT_MISMATCH`.
+- `list-user-sessions` and `revoke-user-sessions` see the tenant's sessions only,
+  and `revoke-user-session` refuses another tenant's session.
+- An impersonation session is bound to the tenant it was started on.
+
+Better Auth's admin role is a field of the global user, so on its own it would
+make an admin of one tenant an admin of every tenant they can get a session on.
+On a tenant's host the caller must also administer that tenant
+(`canAdministerTenant`), else `403 ADMIN_NOT_TENANT_ADMIN`. The default,
+`organizationAdminsOnly`, accepts an `owner` or `admin` member of the tenant's
+organization; pass your own function for platform staff:
+
+```ts
+multiTenant({
+  // ...
+  canAdministerTenant: async (user, tenant, ctx) =>
+    user.email.endsWith("@yourcompany.com") || organizationAdminsOnly(user, tenant, ctx),
+});
+```
+
+Passwords, emails, roles and bans are global too, so changing them for a user who
+also belongs to another tenant would change them there as well: a password set
+by one tenant's admin would sign in as the user on the other tenant. The routes
+that do this (`set-user-password`, `update-user`, `set-role`, `ban-user`,
+`unban-user`, `remove-user`) refuse a user who is a member of any other
+organization with `403 ADMIN_SHARED_USER`. Session routes and impersonation
+still work for them. `adminSharedUsers: "allow"` lifts the refusal.
+
+`create-user` is not scoped; add the new user to the tenant's organization
+yourself. Without `getOrganizationId` the plugin logs a
+warning that admin routes are unscoped; `admin: false` turns the scoping and the
+warning off.
+
 ## Sessions across tenants
 
 One user can be signed in to several tenants, and Better Auth lists and revokes
@@ -397,6 +561,41 @@ it, so use a `baseURL` that follows the request host.
 answers per plugin, and how to configure a relying party, SIWE domain, Google
 client id or OAuth redirect per tenant. Gaps that only Better Auth can close are
 written up in [docs/upstream-proposals.md](./docs/upstream-proposals.md).
+
+### Multi-session
+
+With Better Auth's `multiSession` plugin, `/multi-session/list-device-sessions`
+returns only the tenant's sessions, and `/multi-session/set-active` or
+`/multi-session/revoke` with another tenant's session is refused with
+`403 CROSS_TENANT_SESSION`. On subdomains its cookies are host cookies and
+already apart; this matters when tenants share a host (path mode), where signing
+in on one tenant no longer signs the same user out of another.
+
+### API keys
+
+`@better-auth/api-key` keys belong to a user or an organization, and users are
+global, so by default a key made on one tenant works on every other. Set
+`apiKeys: true` (and migrate the `apikey.tenantId` column) to bind each key to
+the tenant it was created on:
+
+- A key used as a session (`enableSessionForAPIKeys`) is refused on another
+  tenant with `403 CROSS_TENANT_SESSION`, and a key with no tenant with
+  `403 UNBOUND_SESSION` (unless `unboundSessions: "allow"`). This holds whichever
+  order the two plugins are listed in.
+- On a tenant's host, `/api-key/get`, `list`, `update` and `delete` only find
+  that tenant's keys; another tenant's key is `404`. So does
+  `auth.api.verifyApiKey` when you pass it the request's headers: another
+  tenant's key comes back `valid: false`.
+- With `getOrganizationId`, creating or listing an organization's keys needs the
+  tenant's organization (`403 ORGANIZATION_TENANT_MISMATCH`).
+
+Keys are stamped in the database, so the binding needs a database row for each
+key: the plugin's default `storage: "database"`, or `"secondary-storage"` with
+`fallbackToDatabase: true` (the checks read the row, not the cached copy). With
+secondary storage alone, creating a key on a tenant's host fails with
+`500 API_KEY_NOT_IN_DATABASE` rather than hand out a key bound to nothing. Keys created before you turn it on have no tenant; re-issue
+them, or set their `tenantId`. The plugin warns at startup when the api-key plugin
+is installed and `apiKeys` is not set.
 
 ## Cookies across subdomains
 
@@ -464,6 +663,12 @@ your database adapter and the code in your callbacks must run there too.
 
 What the plugin enforces on a tenant's host:
 
+- A state-changing request whose `Origin` (or `Referer`) is another host is
+  refused (`403 CROSS_TENANT_ORIGIN`, `sameOriginOnly`). Tenant subdomains are
+  "same-site", so browsers send a tenant's cookies on requests from another
+  tenant's page, and a wildcard `trustedOrigins` such as `https://*.example.com`
+  lets them past Better Auth's CSRF check. OAuth and SAML callbacks are exempt.
+
 - A session from another tenant is refused (`403 CROSS_TENANT_SESSION`) whether
   it arrives as a cookie or as a bearer token from Better Auth's `bearer`
   plugin.
@@ -489,10 +694,8 @@ What the plugin enforces on a tenant's host:
   request with no tenant is refused
   (`400 TENANT_REQUIRED`) and one without a stamp is refused on use
   (`403 UNBOUND_SESSION`), so a plugin that skips the adapter gets no working
-  session either. `@better-auth/api-key` is a separate package that this
-  repository does not install, so its sessions are not verified here: if you use
-  it with sessions enabled, test that a key from one tenant is refused on
-  another.
+  session either. `@better-auth/api-key` sessions are bound with `apiKeys: true`,
+  see [API keys](#api-keys).
 - With `bindVerifications` (default), a magic-link token, OTP, two-factor
   challenge, trusted-device cookie, passkey challenge, SIWE nonce or OAuth state
   issued on one tenant is refused on another
@@ -645,12 +848,20 @@ a database per tenant.
 
 | Option | Default | Description |
 | --- | --- | --- |
-| `baseDomain` | — | Apex domain tenants live under, e.g. `example.com`. |
+| `baseDomain` | — | Subdomain tenancy: the apex domain tenants live under, e.g. `example.com`. Set this, `pathPrefix` or `getTenantSlug`. |
+| `pathPrefix` | — | Path tenancy: tenants are addressed as `<basePath><pathPrefix>/<slug>/…`. Mount through `withTenantPaths`. See [Path-based tenants](#path-based-tenants). |
+| `getTenantSlug` | — | `({ headers, request, path }) => slug \| null`. Your own resolver. See [Your own resolver](#your-own-resolver). |
+| `tenantCookies` | `true` with `pathPrefix`, else `false` | Give every tenant its own cookie names, and hide other tenants' cookies from the request. |
 | `getTenant` | — | `(slug) => Tenant \| null`. `null` becomes a 404. |
 | `getTenantByDomain` | — | `(domain) => Tenant \| null` for custom domains outside `baseDomain`. See [Custom domains](#custom-domains). |
 | `getOrganizationId` | — | `(tenant) => organizationId`. Locks the active organization on tenant hosts, refuses other organizations' ids and slugs on every `/organization/*` endpoint, scopes teams and `activeTeamId` to it, and ties SSO providers to it. See [With the `organization` plugin](#with-the-organization-plugin). |
 | `getSSODomains` | — | `(tenant) => string[]`. Email domains a tenant owns, for SSO providers with no organization. Turns on the SSO checks. See [With `@better-auth/sso`](#with-better-authsso). |
 | `canAccessTenant` | — | `(user, tenant, { organizationId, adapter }) => boolean`. Refuses sessions for users the tenant does not let in (`TENANT_ACCESS_DENIED`). `organizationMembersOnly` is a ready one. See [Who may sign in to a tenant](#who-may-sign-in-to-a-tenant). |
+| `admin` | `true` with `getOrganizationId`, else `false` | Scope the `admin` plugin to the tenant's members and sessions. `true` without `getOrganizationId` throws at startup. See [Admin plugin](#admin-plugin). |
+| `canAdministerTenant` | `organizationAdminsOnly` | `(user, tenant, { organizationId, adapter }) => boolean`. Who may use the `admin` plugin on a tenant's host (`ADMIN_NOT_TENANT_ADMIN`). See [Admin plugin](#admin-plugin). |
+| `adminSharedUsers` | `"refuse"` | `"refuse"` stops admin routes that change the global user from touching a user who belongs to another organization too (`ADMIN_SHARED_USER`); `"allow"` lets them. |
+| `sameOriginOnly` | `true` | Refuse state-changing requests on a tenant's host from another origin (`CROSS_TENANT_ORIGIN`). Subdomain and custom-domain tenancy only. |
+| `apiKeys` | `false` | Bind `@better-auth/api-key` keys to the tenant they were created on (`apikey.tenantId`). See [API keys](#api-keys). |
 | `teams` | `true` with `getOrganizationId`, else `false` | Scope the organization plugin's team routes, `list-user-teams` and `activeTeamId` to the tenant's organization. `false` turns it off; `true` without `getOrganizationId` throws at startup. See [Teams](#teams). |
 | `sso` | `true` with `getOrganizationId` or `getSSODomains`, else `false` | Scope `@better-auth/sso` to the tenant's providers. `false` turns it off (no checks, no startup warning); `true` without either option throws at startup, and so does `false` with `ssoRequireTenantMapping`. |
 | `ssoRequireTenantMapping` | `false` | With SSO installed and neither `getOrganizationId` nor `getSSODomains` set, `true` refuses every SSO route on tenant hosts instead of leaving SSO unscoped. |
@@ -670,6 +881,10 @@ a database per tenant.
 | `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
 | `onTenantResolved` | — | Called after each successful resolution. |
 
+`cacheTenantLookup(lookup, { ttl, maxSize?, cacheMisses? })` wraps `getTenant`
+or `getTenantByDomain` with an in-memory cache; see
+[Caching tenant lookups](#caching-tenant-lookups).
+
 Additional options of `createTenantAuth` (it also takes every option above except `requireTenant`). See [Database per tenant](#database-per-tenant).
 
 | Option | Default | Description |
@@ -677,12 +892,13 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | `createAuth` | — | `(tenant) => BetterAuthOptions`. Builds a tenant's instance, with its own `database`. |
 | `maxSize` | unbounded | Most instances cached; the least recently used is evicted beyond it. A positive integer. |
 | `onEvict` | — | `(tenant, auth) => void`. Called when an instance leaves the cache; close its connections here. |
+| `basePath` | `"/api/auth"` | With `pathPrefix`: where the instances are mounted, used to find the tenant in the URL and given to every instance. |
 
 ## Error codes
 
 | Code | Status | Meaning |
 | --- | --- | --- |
-| `TENANT_REQUIRED` | 400 | The path needs a tenant and the host did not name one. Always, with `createTenantAuth`. |
+| `TENANT_REQUIRED` | 400 | The path needs a tenant and the request did not name a valid one (host, path prefix or `getTenantSlug`). Always, with `createTenantAuth`. |
 | `INVALID_FORWARDED_HOST` | 400 | `trustProxy` is on and the forwarded host is malformed, disagrees between `X-Forwarded-Host` and `Forwarded`, or has fewer entries than the trusted hops. |
 | `TENANT_NOT_FOUND` | 404 | `getTenant` (or `getTenantByDomain`) returned `null`. Same for `createTenantAuth`, before any instance is created. |
 | `TENANT_INACTIVE` | 403 | The tenant's `status` is not `"active"`. |
@@ -690,6 +906,10 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
 | `TENANT_ACCESS_DENIED` | 403 | `canAccessTenant` did not let the user in; no session was created. |
 | `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or an organization, team, invitation or member route named another organization's (see `getOrganizationId`). |
+| `ADMIN_TENANT_MISMATCH` | 403 | An `admin` plugin route named a user who is not a member of the tenant's organization (see `admin`). |
+| `ADMIN_NOT_TENANT_ADMIN` | 403 | The caller of an `admin` plugin route does not administer the tenant (see `canAdministerTenant`). |
+| `ADMIN_SHARED_USER` | 403 | An admin route that changes the global user named a user who also belongs to another organization (see `adminSharedUsers`). |
+| `CROSS_TENANT_ORIGIN` | 403 | A state-changing request came from another host's page (see `sameOriginOnly`). |
 | `TEAM_TENANT_MISMATCH` | 403 | A team route or `activeTeamId` named a team of another tenant's organization. |
 | `VERIFICATION_TENANT_MISMATCH` | 403 | A code, token, nonce, challenge or pending cookie was issued on a different tenant, or carries no tenant stamp (see `bindVerifications`). |
 | `SSO_PROVIDER_TENANT_MISMATCH` | 403 | An SSO sign-in, registration, callback, SAML response or provider route reached a provider that does not belong to the tenant, or a SAML RelayState that was not handed out on this tenant (see `getSSODomains`, `ssoRequireTenantMapping`). |
@@ -814,9 +1034,11 @@ To run one yourself, see its README; the short version is
 
 ## Scope
 
-Tenant resolution, session binding, cross-tenant rejection and callback origins
-are implemented and tested. Query-level data isolation helpers and per-tenant
-OAuth provider configuration are not in this release.
+Tenant resolution (subdomain, custom domain, path or your own), session binding,
+cross-tenant rejection and callback origins are implemented and tested, as is
+scoping for the organization, admin, multi-session, SSO and API key plugins.
+Query-level data isolation helpers and per-tenant OAuth provider configuration
+are not in this release.
 
 ## Contributing
 
