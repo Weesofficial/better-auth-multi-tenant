@@ -1,15 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Security
-
-- **`deviceAuthorization` codes can be bound to a tenant** (`deviceCodes: true`,
-  needs the new `deviceCode.tenantId` column). Before, a code approved on one
-  tenant could be redeemed for a session on another. On a tenant's host the
-  device routes now only find that tenant's codes. The plugin warns at startup
-  when `deviceAuthorization` is installed and `deviceCodes` is not set.
-
 ## 0.6.0
 
 ### Security
@@ -39,6 +29,12 @@ Found in a pre-release review; each has a regression test in
   database row, and creating a key that has no row fails with
   `500 API_KEY_NOT_IN_DATABASE`.
 - `allowHeaderOverride` logs a warning when `NODE_ENV` is `production`.
+- **`deviceAuthorization` codes can be bound to a tenant** (`deviceCodes: true`,
+  needs the new `deviceCode.tenantId` column). A code approved on one tenant
+  could otherwise be redeemed for a session on another. On a tenant's host the
+  device routes now only find that tenant's codes, and the plugin warns at
+  startup when `deviceAuthorization` is installed and `deviceCodes` is not set.
+  Tested in `test/device-authorization.test.ts`.
 
 ### Added
 
