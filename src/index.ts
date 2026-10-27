@@ -33,6 +33,7 @@ import { tenantAccessHook, type CanAccessTenant } from "./access.js";
 import { adminScopeHook, type CanAdministerTenant } from "./admin.js";
 import { apiKeyHooks, apiKeySchema, bindApiKeySessions } from "./api-key.js";
 import { deviceCodeHook, deviceCodeSchema } from "./device-authorization.js";
+import { addJwtTenantClaim } from "./jwt.js";
 import { invitationListHook, organizationScopeHook } from "./organization.js";
 import { foreignSessionHook, setScopedHeaders, withoutCookies } from "./foreign-session.js";
 import { multiSessionHooks } from "./multi-session.js";
@@ -129,6 +130,22 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * (`403 ADMIN_SHARED_USER`); `"allow"` lets them through.
    */
   adminSharedUsers?: "refuse" | "allow";
+  /**
+   * Roles of the `admin` plugin are global, and many apps read `user.role` as a
+   * platform-wide permission. `"refuse"` (the default) stops `create-user` and
+   * `set-role` on a tenant's host from giving out one of the admin plugin's
+   * `adminRoles` (default `["admin"]`), with `403 ADMIN_ROLE_NOT_ASSIGNABLE`;
+   * `"allow"` lets a tenant's administrators hand out every role.
+   */
+  adminRoleAssignment?: "refuse" | "allow";
+  /**
+   * Claim that the `jwt` plugin's tokens carry the session's tenant id in.
+   * Every tenant shares one `baseURL`, so without it a token minted on one
+   * tenant verifies for every other. Defaults to `"tenantId"`; `false` leaves
+   * tokens as the `jwt` plugin makes them. Needs `jwt()` to be passed an
+   * options object (`jwt({})`); the plugin warns at startup otherwise.
+   */
+  jwtTenantClaim?: string | false;
   /**
    * Refuse a request on a tenant's host whose `Origin` (or, without one,
    * `Referer`) is another host, with `403 CROSS_TENANT_ORIGIN`. Tenant
@@ -352,6 +369,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
     admin: adminOption,
     canAdministerTenant,
     adminSharedUsers = "refuse",
+    adminRoleAssignment = "refuse",
+    jwtTenantClaim = "tenantId",
     sameOriginOnly = true,
     apiKeys,
     deviceCodes,
@@ -475,6 +494,28 @@ export const multiTenant = (options: MultiTenantOptions) => {
           "[better-auth-multi-tenant] the admin plugin is installed but getOrganizationId is not set, " +
             "so admin routes on a tenant's host list and act on every tenant's users. Set getOrganizationId to scope them, or admin: false to silence this.",
         );
+      }
+
+      const jwtPlugin = ctx.options.plugins?.find((p) => p.id === "jwt");
+      if (jwtPlugin && jwtTenantClaim !== false && !addJwtTenantClaim(jwtPlugin, jwtTenantClaim, getSessionTenantId)) {
+        ctx.logger.warn(
+          "[better-auth-multi-tenant] the jwt plugin was created without options, so its tokens cannot carry the tenant: a token minted on one tenant verifies for every other. " +
+            "Create it as jwt({}) so the tenant claim is added, or set jwtTenantClaim: false to silence this.",
+        );
+      }
+
+      for (const [id, name] of [
+        ["oauth-provider", "@better-auth/oauth-provider"],
+        ["oidc-provider", "the oidcProvider plugin"],
+        ["mcp", "the mcp plugin"],
+        ["scim", "@better-auth/scim"],
+      ] as const) {
+        if (ctx.options.plugins?.some((p) => p.id === id)) {
+          ctx.logger.warn(
+            `[better-auth-multi-tenant] ${name} is installed but not tenant-scoped: its clients, connections and access tokens are shared by every tenant, ` +
+              "and its access tokens are not checked against the request's tenant. See the README's compatibility notes.",
+          );
+        }
       }
 
       const apiKeyPlugin = ctx.options.plugins?.find((p) => p.id === "api-key");
@@ -684,7 +725,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         ...(revokeScope === "tenant" ? [revokeScopeHook(getSessionTenantId)] : []),
         ...(getOrganizationId ? [organizationScopeHook] : []),
         ...(teamsScoped ? [teamScopeHook] : []),
-        ...(adminScoped ? [adminScopeHook(getSessionTenantId, canAdministerTenant, adminSharedUsers)] : []),
+        ...(adminScoped ? [adminScopeHook(getSessionTenantId, canAdministerTenant, adminSharedUsers, adminRoleAssignment)] : []),
         ...multiSessionHooks(getSessionTenantId, unboundSessions).before,
         ...(apiKeys ? apiKeyHooks(Boolean(getOrganizationId)).before : []),
         ...(deviceCodes ? [deviceCodeHook] : []),

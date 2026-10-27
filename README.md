@@ -206,6 +206,13 @@ const authClient = createAuthClient({ baseURL: `${location.origin}/api/auth/t/${
   redirect URIs are built under `/api/auth/t/<slug>`, so register each
   tenant's redirect URI with your OAuth providers (or use one provider app per
   tenant with `createTenantAuth`).
+- **Tenants share one origin in the browser.** Every tenant's cookies go with
+  every request to the host, and a page under `/t/globex` is same-origin with
+  `/api/auth/t/acme`, so script running on one tenant's pages can act as the
+  signed-in user on every other tenant; Better Auth's CSRF check and
+  `sameOriginOnly` cannot tell them apart. Do not serve tenant-authored HTML or
+  script from the shared origin. If tenants customise their pages, or one XSS
+  must not reach every tenant, use subdomains instead.
 - **The URL is chosen by the client**, unlike a host backed by DNS. Session
   binding still refuses another tenant's session, but anyone can sign in to any
   tenant unless you set `canAccessTenant`. Set it.
@@ -521,8 +528,15 @@ that do this (`set-user-password`, `update-user`, `set-role`, `ban-user`,
 organization with `403 ADMIN_SHARED_USER`. Session routes and impersonation
 still work for them. `adminSharedUsers: "allow"` lifts the refusal.
 
-`create-user` is not scoped; add the new user to the tenant's organization
-yourself. Without `getOrganizationId` the plugin logs a
+Roles are global too, and many apps read `user.role` as a platform-wide
+permission, so `create-user` and `set-role` on a tenant's host cannot give out
+one of the admin plugin's `adminRoles` (default `["admin"]`):
+`403 ADMIN_ROLE_NOT_ASSIGNABLE`. Other roles work as before.
+`adminRoleAssignment: "allow"` lifts the refusal.
+
+`create-user` is not scoped otherwise: add the new user to the tenant's
+organization yourself, and note that it answers `USER_ALREADY_EXISTS` for an
+email registered on any tenant. Without `getOrganizationId` the plugin logs a
 warning that admin routes are unscoped; `admin: false` turns the scoping and the
 warning off.
 
@@ -680,6 +694,22 @@ What the plugin enforces on a tenant's host:
   "same-site", so browsers send a tenant's cookies on requests from another
   tenant's page, and a wildcard `trustedOrigins` such as `https://*.example.com`
   lets them past Better Auth's CSRF check. OAuth and SAML callbacks are exempt.
+  It applies to subdomain and custom-domain tenancy only: path tenancy shares
+  one origin (see [Path-based tenants](#path-based-tenants)), and with
+  `getTenantSlug` the plugin does not know which host is the tenant's, so
+  check the `Origin` yourself if your resolver reads the host.
+- Tokens from Better Auth's `jwt` plugin carry the tenant they were minted on
+  (`tenantId`, `jwtTenantClaim`). Their `iss` and `aud` are the one `baseURL`
+  shared by every tenant, so a service that verifies them must also compare the
+  claim with the tenant it serves:
+
+  ```ts
+  const { payload } = await jwtVerify(token, jwks, { issuer: BASE_URL, audience: BASE_URL });
+  if (payload.tenantId !== tenant.id) throw new Error("token for another tenant");
+  ```
+
+  The plugin reads its options from the object passed to `jwt()`, so create it
+  as `jwt({})`; with `jwt()` the claim cannot be added and the plugin warns.
 
 - A session from another tenant is refused (`403 CROSS_TENANT_SESSION`) whether
   it arrives as a cookie or as a bearer token from Better Auth's `bearer`
@@ -760,6 +790,13 @@ What it does **not** do, so you can plan for it:
 - **Suspended and unknown tenants look different**: `403 TENANT_INACTIVE`
   versus `404 TENANT_NOT_FOUND`. If that must not be visible, return `null`
   from `getTenant` for inactive tenants.
+- **OAuth provider and SCIM plugins are not scoped.** With
+  `@better-auth/oauth-provider` (or `oidcProvider` / `mcp`) and
+  `@better-auth/scim`, clients, consents, SCIM connections and access tokens are
+  shared by every tenant, and an access token is not checked against the host's
+  tenant (only session tokens are). Authorization codes are verification rows,
+  so they are bound. The plugin warns at startup when one is installed. Use
+  `createTenantAuth` (a database per tenant) if they must be separate.
 - **Your own queries are not filtered.** Scope every data query by tenant
   yourself.
 - **`trustProxy` is trust you grant.** The plugin cannot tell whether your
@@ -770,6 +807,23 @@ What it does **not** do, so you can plan for it:
   that it was run on Workers, Deno or Bun.
 
 Report vulnerabilities privately; see [SECURITY.md](./SECURITY.md).
+
+## Upgrading from 0.5
+
+0.6.0 refuses some requests 0.5 let through. Each has an option to restore the
+old behaviour if you depend on it:
+
+| What changes | Error | Restore with |
+| --- | --- | --- |
+| With `getOrganizationId` and the `admin` plugin, admin routes are scoped to the tenant, and only an `owner`/`admin` member of its organization may call them. A platform admin who is not one is refused. | `ADMIN_NOT_TENANT_ADMIN`, `ADMIN_TENANT_MISMATCH` | `canAdministerTenant` (let your staff in), or `admin: false` |
+| Admin changes to the global user (password, email, role, ban, removal) refuse a user who belongs to another organization too. | `ADMIN_SHARED_USER` | `adminSharedUsers: "allow"` |
+| `create-user` / `set-role` cannot give out an admin role from a tenant's host. | `ADMIN_ROLE_NOT_ASSIGNABLE` | `adminRoleAssignment: "allow"` |
+| A state-changing request from another origin is refused, including a browser extension, or `www.acme.com` calling `acme.com`. | `CROSS_TENANT_ORIGIN` | `sameOriginOnly: false` |
+| `jwt` plugin tokens gain a `tenantId` claim. | — | `jwtTenantClaim: false` |
+
+New, opt-in columns: `apikey.tenantId` (`apiKeys: true`) and
+`deviceCode.tenantId` (`deviceCodes: true`). Run your migration before turning
+them on. `session.tenantId` and `verification.tenantId` are unchanged from 0.5.
 
 ## Database per tenant
 
@@ -872,6 +926,8 @@ a database per tenant.
 | `admin` | `true` with `getOrganizationId`, else `false` | Scope the `admin` plugin to the tenant's members and sessions. `true` without `getOrganizationId` throws at startup. See [Admin plugin](#admin-plugin). |
 | `canAdministerTenant` | `organizationAdminsOnly` | `(user, tenant, { organizationId, adapter }) => boolean`. Who may use the `admin` plugin on a tenant's host (`ADMIN_NOT_TENANT_ADMIN`). See [Admin plugin](#admin-plugin). |
 | `adminSharedUsers` | `"refuse"` | `"refuse"` stops admin routes that change the global user from touching a user who belongs to another organization too (`ADMIN_SHARED_USER`); `"allow"` lets them. |
+| `adminRoleAssignment` | `"refuse"` | `"refuse"` stops `create-user` and `set-role` on a tenant's host from giving out the admin plugin's `adminRoles` (`ADMIN_ROLE_NOT_ASSIGNABLE`); `"allow"` lets them. |
+| `jwtTenantClaim` | `"tenantId"` | Claim the `jwt` plugin's tokens carry the session's tenant in; `false` leaves tokens alone. Needs `jwt({})`. |
 | `sameOriginOnly` | `true` | Refuse state-changing requests on a tenant's host from another origin (`CROSS_TENANT_ORIGIN`). Subdomain and custom-domain tenancy only. |
 | `apiKeys` | `false` | Bind `@better-auth/api-key` keys to the tenant they were created on (`apikey.tenantId`). See [API keys](#api-keys). |
 | `deviceCodes` | `false` | Bind `deviceAuthorization` codes to the tenant that issued them (`deviceCode.tenantId`). See [Device authorization](#device-authorization). |
@@ -922,6 +978,7 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | `ADMIN_TENANT_MISMATCH` | 403 | An `admin` plugin route named a user who is not a member of the tenant's organization (see `admin`). |
 | `ADMIN_NOT_TENANT_ADMIN` | 403 | The caller of an `admin` plugin route does not administer the tenant (see `canAdministerTenant`). |
 | `ADMIN_SHARED_USER` | 403 | An admin route that changes the global user named a user who also belongs to another organization (see `adminSharedUsers`). |
+| `ADMIN_ROLE_NOT_ASSIGNABLE` | 403 | `create-user` or `set-role` on a tenant's host tried to give out one of the admin plugin's `adminRoles` (see `adminRoleAssignment`). |
 | `CROSS_TENANT_ORIGIN` | 403 | A state-changing request came from another host's page (see `sameOriginOnly`). |
 | `TEAM_TENANT_MISMATCH` | 403 | A team route or `activeTeamId` named a team of another tenant's organization. |
 | `VERIFICATION_TENANT_MISMATCH` | 403 | A code, token, nonce, challenge or pending cookie was issued on a different tenant, or carries no tenant stamp (see `bindVerifications`). |

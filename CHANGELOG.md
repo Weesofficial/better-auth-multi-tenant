@@ -2,6 +2,10 @@
 
 ## 0.6.0
 
+0.6.0 refuses some requests 0.5 let through; see
+[Upgrading from 0.5](./README.md#upgrading-from-05) for each change and the
+option that restores the old behaviour.
+
 ### Security
 
 Found in a pre-release review; each has a regression test in
@@ -29,6 +33,19 @@ Found in a pre-release review; each has a regression test in
   database row, and creating a key that has no row fails with
   `500 API_KEY_NOT_IN_DATABASE`.
 - `allowHeaderOverride` logs a warning when `NODE_ENV` is `production`.
+- **`jwt` plugin tokens carry the tenant** (`tenantId`, `jwtTenantClaim`). Every
+  tenant shares one `baseURL`, which is the tokens' `iss` and `aud`, so a token
+  minted on one tenant verified for every other. The claim is added on top of
+  your own `definePayload`; create the plugin as `jwt({})`, since `jwt()` has no
+  options object to add it to (the plugin warns).
+- **Tenant admins cannot give out the global admin role.** `create-user` and
+  `set-role` on a tenant's host refuse the admin plugin's `adminRoles` with
+  `403 ADMIN_ROLE_NOT_ASSIGNABLE` (`adminRoleAssignment: "allow"` lifts it).
+- **Unscoped plugins are reported.** A startup warning names
+  `@better-auth/oauth-provider`, `oidcProvider`, `mcp` and `@better-auth/scim`,
+  whose clients, connections and access tokens are shared by every tenant.
+- Documented that path tenancy cannot isolate tenants in the browser (one
+  origin) and that `sameOriginOnly` does not cover `getTenantSlug`.
 - **`deviceAuthorization` codes can be bound to a tenant** (`deviceCodes: true`,
   needs the new `deviceCode.tenantId` column). A code approved on one tenant
   could otherwise be redeemed for a session on another. On a tenant's host the

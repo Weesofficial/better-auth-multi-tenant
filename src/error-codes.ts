@@ -49,6 +49,10 @@ export const ERROR_CODES = {
     code: "ADMIN_SHARED_USER",
     message: "This user is also a member of another tenant, so this change cannot be made from here",
   },
+  ADMIN_ROLE_NOT_ASSIGNABLE: {
+    code: "ADMIN_ROLE_NOT_ASSIGNABLE",
+    message: "Admin roles are global and cannot be given out from a tenant",
+  },
   CROSS_TENANT_ORIGIN: {
     code: "CROSS_TENANT_ORIGIN",
     message: "This request came from a different origin than the tenant's",
