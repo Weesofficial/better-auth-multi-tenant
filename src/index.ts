@@ -38,7 +38,7 @@ import {
 } from "./organization.js";
 import { foreignSessionHook } from "./foreign-session.js";
 import { multiSessionHooks } from "./multi-session.js";
-import { requestResolver } from "./request.js";
+import { requestResolver, tenantTrustedOrigins } from "./request.js";
 import { revokeScopeHook } from "./revoke.js";
 import { sameOriginHook } from "./same-origin.js";
 import { resolveScoping } from "./scoping.js";
@@ -114,6 +114,8 @@ export const multiTenant = (options: MultiTenantOptions) => {
     port,
     onTenantResolved,
     tenantCookies: tenantCookiesOption,
+    trustTenantOrigins = true,
+    tenantBaseURL = false,
     ...resolverOptions
   } = options;
   assertTrustProxy(resolverOptions.trustProxy);
@@ -126,13 +128,17 @@ export const multiTenant = (options: MultiTenantOptions) => {
     ? ssoGuardHooks(getSSODomains)
     : { before: ssoRequireTenantMapping ? [ssoRefuseHook] : [], after: [] };
 
+  const lookup = { ...resolverOptions, getTenant, getTenantByDomain };
   const resolveRequest = requestResolver({
-    lookup: { ...resolverOptions, getTenant, getTenantByDomain },
+    lookup,
     requireTenant,
     getOrganizationId,
     tenantCookies,
+    tenantBaseURL,
+    protocol,
     onTenantResolved,
   });
+  const trusted = trustTenantOrigins ? { trustedOrigins: tenantTrustedOrigins(lookup, protocol) } : {};
 
   return {
     id: "multi-tenant",
@@ -167,15 +173,21 @@ export const multiTenant = (options: MultiTenantOptions) => {
       const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
       const verificationHooks = bindVerifications ? verificationBindingHooks() : {};
       if (!getOrganizationId) {
-        return canAccessTenant || bindVerifications
-          ? { options: { databaseHooks: { ...verificationHooks, ...(canAccessTenant ? { session: accessHooks } : {}) } } }
-          : undefined;
+        return {
+          options: {
+            ...trusted,
+            ...(canAccessTenant || bindVerifications
+              ? { databaseHooks: { ...verificationHooks, ...(canAccessTenant ? { session: accessHooks } : {}) } }
+              : {}),
+          },
+        };
       }
       const orgPlugin = ctx.options.plugins?.find((p) => p.id === "organization");
       const teamsEnabled =
         teamsScoped && Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
         options: {
+          ...trusted,
           databaseHooks: {
             ...verificationHooks,
             session: {

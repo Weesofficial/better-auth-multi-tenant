@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **Tenant origins are trusted automatically** (`trustTenantOrigins`, on by
+  default). A request's own origin is trusted when its host is an active
+  tenant's subdomain or custom domain, so custom domains stored in a database no
+  longer have to be listed in Better Auth's `trustedOrigins`. Only the
+  requesting tenant's origin is added; a `callbackURL` on another tenant's
+  domain is still refused. The tenant is looked up once per request, shared
+  with the resolver.
+- **`tenantBaseURL`** (off by default) builds Better Auth's `baseURL` from the
+  tenant's host on each request, so magic links, verification emails and OAuth
+  redirect URIs open on the subdomain or custom domain the flow started on.
+
 ## 0.6.0
 
 0.6.0 refuses some requests 0.5 let through; see
