@@ -1093,7 +1093,7 @@ push and pull request.
 | [TanStack Start](./examples/tanstack-start) | Node 22 (Vite dev server) | `@tanstack/react-start` 1.169.3 | server route `handlers` calling `auth.handler(request)` | Passing |
 | [Cloudflare Workers](./examples/cloudflare-workers) | `workerd` via `wrangler dev --local` | `wrangler` 4.151.3, `hono` 4.13.13 | `auth.handler(c.req.raw)` | Passing |
 
-All use Better Auth 1.6.25. The examples keep users in memory and hardcode the
+All use Better Auth 1.7.14. The examples keep users in memory and hardcode the
 tenant list; swap in your own database and `getTenant` lookup. TanStack Start is
 exercised on its dev server, and Workers on the local `workerd` simulator, not
 on a deployed Worker.
