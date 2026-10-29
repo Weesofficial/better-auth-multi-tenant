@@ -192,6 +192,23 @@ it, and on a tenant's host `/device/token`, `/device`, `/device/approve` and
 minutes anyway. The plugin warns at startup when `deviceAuthorization` is
 installed and `deviceCodes` is not set.
 
+## Same email on several tenants
+
+By default a user is global, as in Better Auth: one account per email, usable on
+every tenant you let them into. Set `identity: "tenant"` and the same email on
+two tenants is two separate users, with separate passwords, social accounts,
+codes and sessions:
+
+```ts
+multiTenant({ baseDomain: "example.com", getTenant, identity: "tenant" })
+```
+
+Every `user` and `account` query is limited to the requesting tenant, and a
+query outside a tenant's request is refused instead of running across tenants.
+It needs a migration (a `tenantId` column, and the unique index on `email`
+replaced by one on `(tenantId, email)`); see
+[Tenant-scoped identity](./docs/security.md#tenant-scoped-identity-identity-tenant).
+
 ## OAuth across tenant hosts
 
 Google, GitHub and most providers accept no wildcard redirect URI, so every
@@ -273,8 +290,9 @@ keys and device codes.
 
 What it does **not** do:
 
-- **Users are global.** One account can sign in on every tenant unless you set
-  `canAccessTenant`.
+- **Users are global** by default. One account can sign in on every tenant
+  unless you set `canAccessTenant`, or `identity: "tenant"` for one user per
+  tenant.
 - **Your own queries are not filtered.** Scope every data query by tenant
   yourself.
 - **Some plugin state is shared.** Usernames, phone numbers, two-factor settings
@@ -348,6 +366,7 @@ tenant. See [docs/database-per-tenant.md](./docs/database-per-tenant.md).
 | `protocol` | `"https"` | Protocol of the `origin` returned by `/multi-tenant/current`. |
 | `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
 | `trustTenantOrigins` | `true` | Trust the requesting tenant's own subdomain or custom domain without listing it in `trustedOrigins`. Never another tenant's. |
+| `identity` | `"global"` | `"tenant"`: the same email on two tenants is two users. Scopes `user` and `account` queries to the requesting tenant; needs a migration. See [Same email on several tenants](#same-email-on-several-tenants). |
 | `oauthProxyHost` | — | The host of `oAuthProxy`'s `productionURL`. It serves the provider callback without a tenant and hands the profile to the starting tenant. See [OAuth across tenant hosts](#oauth-across-tenant-hosts). |
 | `getTenantPolicy` | — | `(tenant) => ({ methods?, signUp?, requireTwoFactor? })`. Per-tenant allowed sign-in methods, sign-up and required 2FA, enforced on the server. See [Per-tenant auth policy](#per-tenant-auth-policy). |
 | `tenantBaseURL` | `false` | Build `baseURL` from the tenant's host per request, so emailed links and OAuth redirect URIs use its subdomain or custom domain. Changes `jwt` `iss`/`aud` and the redirect URIs providers must accept. |

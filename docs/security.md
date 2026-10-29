@@ -66,6 +66,39 @@ What the plugin enforces on a tenant's host:
   (`revokeSessionsOnPasswordReset`) is not narrowed: it ends every session of the
   user, which is what you want after a reset.
 
+### Tenant-scoped identity (`identity: "tenant"`)
+
+The same email on two tenants is two users, each with its own password,
+accounts (a Google account signs in as a different user on each tenant),
+email and OTP codes, two-factor settings and sessions. The plugin wraps Better
+Auth's database adapter: every `user` and `account` query gets
+`tenantId = <requesting tenant>` added, and every row created is stamped with
+it. With `bindVerifications`, `verification` queries on a tenant's host are
+narrowed the same way, so one tenant's code never replaces another's.
+
+The tenant comes from the request, so a `user` or `account` query outside a
+tenant's request is refused (`400 TENANT_REQUIRED`) rather than run across
+tenants. From your own server code, pass the tenant host's headers:
+`auth.api.signInEmail({ body, headers: new Headers({ host: "acme.example.com" }) })`.
+
+Migrate before turning it on. The plugin adds `user.tenantId` and
+`account.tenantId`, but Better Auth's core schema keeps `user.email` unique and a
+plugin cannot change that, so replace the index yourself (Postgres shown):
+
+```sql
+ALTER TABLE "user" ADD COLUMN "tenantId" text;
+ALTER TABLE "account" ADD COLUMN "tenantId" text;
+-- Backfill: give every existing user and account the tenant it belongs to.
+ALTER TABLE "user" DROP CONSTRAINT "user_email_key";
+CREATE UNIQUE INDEX "user_tenant_email" ON "user" ("tenantId", "email");
+CREATE UNIQUE INDEX "account_tenant_provider" ON "account" ("tenantId", "providerId", "accountId");
+```
+
+Rows without a `tenantId` are invisible on every tenant, so backfill before you
+switch. If you use `username` or `phoneNumber`, make their unique indexes
+per tenant too. `npx @better-auth/cli generate` will keep emitting the global
+unique on `email`; edit the generated migration.
+
 What it does **not** do, so you can plan for it:
 
 - **Users are global.** Better Auth has one user table, so an account created
@@ -74,7 +107,8 @@ What it does **not** do, so you can plan for it:
   answer (`autoSignIn: false` or `requireEmailVerification: true`), sign-up on
   another tenant with the same email answers `422 USER_ALREADY_EXISTS`, which
   reveals that the email is registered somewhere. `canAccessTenant` is checked
-  when a session is created, not on each request.
+  when a session is created, not on each request. With `identity: "tenant"`
+  (below) users are per tenant instead, and none of this applies.
 - **Narrowed revocation has a cost.** Because the password is global, a
   password change with `revokeOtherSessions` leaves the user's sessions on other
   tenants alive, so a stolen session there survives. Set `revokeScope: "all"` to

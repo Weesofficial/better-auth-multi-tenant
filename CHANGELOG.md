@@ -30,6 +30,16 @@
   applies to the hand-off, and the deprecated `/oauth-proxy-callback` counts as
   `social` (every provider). Startup warns when `oAuthProxy` is installed
   without `oauthProxyHost`.
+- **Tenant-scoped identity** (`identity: "tenant"`). The same email on two
+  tenants is two users with separate passwords, social accounts, codes and
+  sessions. The database adapter is wrapped so every `user` and `account` query
+  is limited to the requesting tenant (and `verification` queries too, with
+  `bindVerifications`, so OTP slots are per tenant). A user or account query
+  outside a tenant's request is refused with `TENANT_REQUIRED`. Adds
+  `user.tenantId` and `account.tenantId`; the global unique index on
+  `user.email` has to be replaced by `(tenantId, email)` in a migration.
+  `@better-auth/core` is now an optional peer dependency (it ships with
+  `better-auth`).
 
 ## 0.6.0
 
