@@ -7,8 +7,8 @@
     "smoke": "tsx scripts/smoke.ts"
   },
   "dependencies": {
-    "@better-auth/memory-adapter": "1.6.25",
-    "better-auth": "1.6.25",
+    "@better-auth/memory-adapter": "1.7.14",
+    "better-auth": "1.7.14",
     "better-auth-multi-tenant": "file:../.pack/better-auth-multi-tenant.tgz",
     "hono": "4.13.13"
   },
