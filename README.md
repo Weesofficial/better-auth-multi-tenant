@@ -192,6 +192,44 @@ it, and on a tenant's host `/device/token`, `/device`, `/device/approve` and
 minutes anyway. The plugin warns at startup when `deviceAuthorization` is
 installed and `deviceCodes` is not set.
 
+## OAuth across tenant hosts
+
+Google, GitHub and most providers accept no wildcard redirect URI, so every
+tenant subdomain or custom domain would have to be registered with each one.
+Use Better Auth's `oAuthProxy` with one auth host instead, and tell this plugin
+which host that is:
+
+```ts
+import { oAuthProxy } from "better-auth/plugins";
+
+betterAuth({
+  plugins: [
+    multiTenant({ baseDomain: "example.com", getTenant, oauthProxyHost: "auth.example.com" }),
+    oAuthProxy({ productionURL: "https://auth.example.com" }),
+  ],
+});
+```
+
+Register only `https://auth.example.com/api/auth/callback/<provider>` with each
+provider. A sign-in started on `acme.example.com` (or `app.acme.com`) goes to the
+provider, comes back to `auth.example.com`, and is handed to `acme.example.com`,
+where the session is created and bound to acme:
+
+- `auth.example.com` names no tenant and serves only the provider callback
+  (`/callback/:id`); everything else on it answers `TENANT_REQUIRED`. Keep its
+  label reserved (`auth` is by default).
+- The hand-off is tied to the OAuth state the starting tenant issued, so
+  replaying it on another tenant fails (`error=state_mismatch`) and creates no
+  session.
+- The tenant's `getTenantPolicy` applies to the hand-off as to any OAuth
+  callback.
+- The tenant host must be a trusted origin for `oAuthProxy` to send the user
+  back there; `trustTenantOrigins` (on by default) takes care of it.
+
+`oAuthProxy` proxies the providers in `socialProviders` (`/callback/:id`), not
+`genericOAuth` (`/oauth2/callback/:id`). The plugin warns at startup when
+`oAuthProxy` has a `productionURL` and `oauthProxyHost` is not set.
+
 ## Per-tenant auth policy
 
 `getTenantPolicy` decides, per tenant, how users may sign in. It is enforced on
@@ -310,6 +348,7 @@ tenant. See [docs/database-per-tenant.md](./docs/database-per-tenant.md).
 | `protocol` | `"https"` | Protocol of the `origin` returned by `/multi-tenant/current`. |
 | `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
 | `trustTenantOrigins` | `true` | Trust the requesting tenant's own subdomain or custom domain without listing it in `trustedOrigins`. Never another tenant's. |
+| `oauthProxyHost` | — | The host of `oAuthProxy`'s `productionURL`. It serves the provider callback without a tenant and hands the profile to the starting tenant. See [OAuth across tenant hosts](#oauth-across-tenant-hosts). |
 | `getTenantPolicy` | — | `(tenant) => ({ methods?, signUp?, requireTwoFactor? })`. Per-tenant allowed sign-in methods, sign-up and required 2FA, enforced on the server. See [Per-tenant auth policy](#per-tenant-auth-policy). |
 | `tenantBaseURL` | `false` | Build `baseURL` from the tenant's host per request, so emailed links and OAuth redirect URIs use its subdomain or custom domain. Changes `jwt` `iss`/`aud` and the redirect URIs providers must accept. |
 | `onTenantResolved` | — | Called after each successful resolution. |

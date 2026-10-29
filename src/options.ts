@@ -238,6 +238,16 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * on the server. Called at most once per request; cache it like `getTenant`.
    */
   getTenantPolicy?: GetTenantPolicy;
+  /**
+   * The host Better Auth's `oAuthProxy` plugin uses as its `productionURL`
+   * (`auth.example.com`): OAuth providers redirect there, and it hands the
+   * profile to the tenant the flow started on, where the session is created.
+   * That host names no tenant, so it may serve the provider callback
+   * (`/callback/:id`) without one; every other route on it is refused as usual.
+   * The hand-off is bound to the starting tenant by its OAuth state, so it is
+   * refused on any other tenant.
+   */
+  oauthProxyHost?: string;
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
   /**

@@ -3,6 +3,7 @@ import { setTenantOnContext, type ResolvedTenant, type Tenant } from "./context.
 import { setScopedHeaders, withoutCookies } from "./foreign-session.js";
 import { trimTrailingSlashes } from "./path.js";
 import { requestHost } from "./proxy.js";
+import { normalizeHost } from "./resolver.js";
 import { resolveTenant, type TenantLookup } from "./tenant.js";
 
 const RESOLVED = Symbol.for("better-auth-multi-tenant.resolved");
@@ -33,6 +34,12 @@ function tenantHostOrigin(
   if (!host.ok || !host.host) return null;
   const scheme = protocol ?? (request ? new URL(request.url).protocol.slice(0, -1) : "https");
   return `${scheme}://${host.host.toLowerCase()}`;
+}
+
+function isHost(ctx: { headers?: Headers; request?: Request }, lookup: TenantLookup, expected: string): boolean {
+  if (!ctx.headers) return false;
+  const host = requestHost({ headers: ctx.headers, request: ctx.request }, lookup.trustProxy);
+  return host.ok && normalizeHost(host.host) === normalizeHost(expected);
 }
 
 /**
@@ -68,6 +75,7 @@ export const requestResolver =
     tenantCookies,
     tenantBaseURL,
     protocol,
+    oauthProxyHost,
     onTenantResolved,
   }: {
     lookup: TenantLookup;
@@ -76,12 +84,19 @@ export const requestResolver =
     tenantCookies: boolean;
     tenantBaseURL: boolean;
     protocol: string | undefined;
+    oauthProxyHost: string | undefined;
     onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
   }) =>
   async (ctx: ResolveInput): Promise<Scoped | undefined> => {
     const done = (ctx.context as Record<symbol, unknown>)[RESOLVED] as { scoped?: Scoped } | undefined;
     if (done) return done.scoped;
     const path = ctx.path ?? "";
+    // The OAuth proxy host names no tenant; it only receives provider callbacks
+    // and hands them to the tenant that started the flow.
+    if (oauthProxyHost && path === "/callback/:id" && isHost(ctx, lookup, oauthProxyHost)) {
+      (ctx.context as Record<symbol, unknown>)[RESOLVED] = {};
+      return;
+    }
     // A tenant found while computing trustedOrigins is reused. A miss (no
     // tenant, or an error) resolves again, so the 400/403/404 still comes from here.
     const pending = ctx.request && early.get(ctx.request);

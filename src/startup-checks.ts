@@ -9,7 +9,10 @@ type InitContext = Parameters<NonNullable<BetterAuthPlugin["init"]>>[0];
  */
 export function checkSetup(
   ctx: InitContext,
-  options: Pick<MultiTenantOptions, "allowHeaderOverride" | "headerName" | "admin" | "apiKeys" | "deviceCodes" | "sso"> & {
+  options: Pick<
+    MultiTenantOptions,
+    "allowHeaderOverride" | "headerName" | "admin" | "apiKeys" | "deviceCodes" | "sso" | "oauthProxyHost"
+  > & {
     bindVerifications: boolean;
     adminScoped: boolean;
     hasSSOMapping: boolean;
@@ -47,6 +50,19 @@ export function checkSetup(
     ctx.logger.warn(
       "[better-auth-multi-tenant] the admin plugin is installed but getOrganizationId is not set, " +
         "so admin routes on a tenant's host list and act on every tenant's users. Set getOrganizationId to scope them, or admin: false to silence this.",
+    );
+  }
+
+  const oauthProxy = ctx.options.plugins?.find((p) => p.id === "oauth-proxy");
+  const proxyURL = (oauthProxy?.options as { productionURL?: string } | undefined)?.productionURL;
+  if (proxyURL && !options.oauthProxyHost) {
+    ctx.logger.warn(
+      `[better-auth-multi-tenant] oAuthProxy sends OAuth callbacks to ${proxyURL}, which names no tenant, so they are refused. ` +
+        `Set oauthProxyHost: "${new URL(proxyURL).host}".`,
+    );
+  } else if (proxyURL && options.oauthProxyHost && new URL(proxyURL).host !== options.oauthProxyHost.toLowerCase()) {
+    ctx.logger.warn(
+      `[better-auth-multi-tenant] oauthProxyHost (${options.oauthProxyHost}) is not the host of oAuthProxy's productionURL (${proxyURL}).`,
     );
   }
 
