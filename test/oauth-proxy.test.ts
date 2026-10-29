@@ -98,9 +98,12 @@ test("the proxy host serves only the OAuth callback", async () => {
   });
   assert.equal(res.status, 404);
   assert.equal(await codeOf(res), "TENANT_REQUIRED");
-  const handOff = await request(PROXY, "/callback/google/oauth-proxy?callbackURL=x&profile=y");
-  assert.equal(handOff.status, 404);
-  assert.equal(await codeOf(handOff), "TENANT_REQUIRED");
+  // The hand-off route (`/oauth-proxy-callback` before Better Auth 1.7) is the tenant's, not the proxy host's.
+  for (const path of ["/callback/google/oauth-proxy?callbackURL=x&profile=y", "/oauth-proxy-callback?callbackURL=x&profile=y"]) {
+    const handOff = await request(PROXY, path);
+    assert.ok(handOff.status === 404 || handOff.status === 400, `${path}: ${handOff.status}`);
+    assert.equal(cookiesOf(handOff), "");
+  }
 });
 
 test("without oauthProxyHost the proxy host is not a tenant and the callback is refused", async () => {
