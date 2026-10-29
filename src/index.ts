@@ -41,6 +41,7 @@ import { multiSessionHooks } from "./multi-session.js";
 import { requestResolver, tenantTrustedOrigins } from "./request.js";
 import { revokeScopeHook } from "./revoke.js";
 import { sameOriginHook } from "./same-origin.js";
+import { identitySchema, tenantScopedAdapter } from "./identity.js";
 import { policyBeforeHook, policyFor, policySessionHook, policyUserCreateHook, publicPolicy } from "./policy.js";
 import { resolveScoping } from "./scoping.js";
 import { defaultEnforceSessionTenant, listSessionsHook, revokeSessionHook, sessionTenantHook } from "./session-binding.js";
@@ -120,6 +121,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     tenantBaseURL = false,
     getTenantPolicy,
     oauthProxyHost,
+    identity = "global",
     ...resolverOptions
   } = options;
   assertTrustProxy(resolverOptions.trustProxy);
@@ -178,9 +180,12 @@ export const multiTenant = (options: MultiTenantOptions) => {
 
       const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
       const verificationHooks = bindVerifications ? verificationBindingHooks() : {};
+      const scopedContext =
+        identity === "tenant" ? { context: { adapter: tenantScopedAdapter(ctx.adapter, { verification: bindVerifications }) } } : {};
       const userHooks = getTenantPolicy ? { user: { create: { before: policyUserCreateHook(getTenantPolicy) } } } : {};
       if (!getOrganizationId) {
         return {
+          ...scopedContext,
           options: {
             ...trusted,
             ...(canAccessTenant || bindVerifications || getTenantPolicy
@@ -199,6 +204,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
       const teamsEnabled =
         teamsScoped && Boolean((orgPlugin?.options as { teams?: { enabled?: boolean } } | undefined)?.teams?.enabled);
       return {
+        ...scopedContext,
         options: {
           ...trusted,
           databaseHooks: {
@@ -224,6 +230,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
           },
         },
       },
+      ...(identity === "tenant" ? identitySchema : {}),
       ...(bindVerifications ? verificationSchema : {}),
       ...(apiKeys ? apiKeySchema : {}),
       ...(deviceCodes ? deviceCodeSchema : {}),

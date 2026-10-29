@@ -248,6 +248,17 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * refused on any other tenant.
    */
   oauthProxyHost?: string;
+  /**
+   * `"global"` (the default): one user per email, shared by every tenant, as in
+   * Better Auth. `"tenant"`: the same email on two tenants is two separate users,
+   * each with its own password, accounts and sessions. Every `user` and `account`
+   * query is limited to the requesting tenant (and, with `bindVerifications`,
+   * every `verification` query on a tenant's host), and a user or account query
+   * outside a tenant's request is refused. Adds `user.tenantId` and
+   * `account.tenantId`; replace the global unique index on `user.email` with a
+   * unique `(tenantId, email)` in your migration. See docs/security.md.
+   */
+  identity?: "global" | "tenant";
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
   /**

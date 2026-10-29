@@ -129,3 +129,15 @@ test("the deprecated /oauth-proxy-callback needs every social provider allowed",
   assert.equal(res.status, 403);
   assert.equal(await codeOf(res), "AUTH_METHOD_NOT_ALLOWED");
 });
+
+test("with identity: \"tenant\", one Google account becomes one user per tenant", async () => {
+  const { request, startAndReturn, pathOf, db } = proxySetup({ identity: "tenant" });
+  for (const host of [ACME, GLOBEX]) {
+    const done = await request(host, pathOf(await startAndReturn(host)));
+    assert.equal(done.status, 302, await done.clone().text());
+    assert.ok(cookiesOf(done));
+  }
+  assert.deepEqual(db.user.map((u) => u.tenantId).sort(), ["t_acme", "t_globex"]);
+  assert.deepEqual(db.account!.map((a) => [a.providerId, a.tenantId]).sort(), [["google", "t_acme"], ["google", "t_globex"]]);
+  assert.deepEqual(db.session.map((s) => s.tenantId).sort(), ["t_acme", "t_globex"]);
+});
