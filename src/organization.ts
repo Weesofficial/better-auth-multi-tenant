@@ -1,4 +1,4 @@
-import { createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
+import { APIError, createAuthMiddleware, getSessionFromCtx } from "better-auth/api";
 import { getTenantFromContext } from "./context.js";
 import { listScopeHook, organizationMismatch, teamOrganizationId, teamTenantMismatch } from "./teams.js";
 
@@ -102,3 +102,68 @@ export const organizationScopeHook = {
 
 /** `list-user-invitations` lists the user's invitations to every organization. */
 export const invitationListHook = listScopeHook("/organization/list-user-invitations");
+
+/**
+ * With an organization bridge, a tenant's host only ever has that tenant's
+ * organization active. Creating an organization makes it active unless the
+ * caller keeps the current one. Refuse before anything is written, so a tenant
+ * host never ends up with a half-created organization.
+ */
+export const organizationCreateHook = {
+  matcher: (ctx: { path?: string }) => ctx.path === "/organization/create",
+  handler: createAuthMiddleware(async (ctx) => {
+    if (!getTenantFromContext(ctx.context)?.organizationId) return;
+    if ((ctx.body as { keepCurrentActiveOrganization?: boolean } | undefined)?.keepCurrentActiveOrganization) return;
+    throw new APIError("FORBIDDEN", {
+      code: "ORGANIZATION_TENANT_MISMATCH",
+      message: "Only this tenant's organization can be active here; pass keepCurrentActiveOrganization: true",
+    });
+  }),
+};
+
+/** `/organization/list` lists every organization of the user; keep the tenant's. */
+export const organizationListHook = {
+  matcher: (ctx: { path?: string }) => ctx.path === "/organization/list",
+  handler: createAuthMiddleware(async (ctx) => {
+    const expected = getTenantFromContext(ctx.context)?.organizationId;
+    const returned = ctx.context.returned;
+    if (!expected || !Array.isArray(returned)) return;
+    return ctx.json(returned.filter((org: { id?: string }) => org.id === expected));
+  }),
+};
+
+/**
+ * A `session.update.before` database hook. The set-active check covers one
+ * route; organization create, accept-invitation and others move
+ * activeOrganizationId too. Catch every write here. Clearing it is allowed:
+ * that only drops privileges, and leave/remove-member need it.
+ */
+export const activeOrganizationGuard =
+  (teamsScoped: boolean, teamsEnabled: boolean) =>
+  async (
+    data: Record<string, unknown>,
+    hookCtx: { context?: { adapter?: Parameters<typeof teamOrganizationId>[0] } } | null,
+  ): Promise<{ data: Record<string, unknown> } | undefined> => {
+    const expected = getTenantFromContext(hookCtx?.context)?.organizationId;
+    if (!expected) return;
+    const next = data.activeOrganizationId;
+    if (next && next !== expected) {
+      throw new APIError("FORBIDDEN", {
+        code: "ORGANIZATION_TENANT_MISMATCH",
+        message: "Only this tenant's organization can be active here",
+      });
+    }
+    // The active team must belong to the tenant's organization. This
+    // also covers accept-invitation, which sets the team first.
+    const team = data.activeTeamId;
+    if (teamsScoped && team) {
+      const adapter = hookCtx?.context?.adapter;
+      if (typeof team !== "string" || !adapter || (await teamOrganizationId(adapter, team)) !== expected) {
+        throw teamTenantMismatch();
+      }
+    }
+    // A team belongs to the organization that was active.
+    if (teamsEnabled && next === null && team === undefined) {
+      return { data: { ...data, activeTeamId: null } };
+    }
+  };
