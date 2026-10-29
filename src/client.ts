@@ -1,6 +1,7 @@
 import type { BetterAuthClientPlugin } from "better-auth/client";
 import { ERROR_CODES, type TenantErrorCode } from "./error-codes.js";
 import type { multiTenant } from "./index.js";
+import type { TenantPolicy } from "./policy.js";
 
 type MultiTenantServerPlugin = ReturnType<typeof multiTenant>;
 
@@ -37,6 +38,8 @@ export interface CurrentTenant {
   id: string;
   slug: string;
   origin: string;
+  /** The tenant's auth policy, when the server sets `getTenantPolicy`. */
+  policy?: TenantPolicy;
 }
 
 export interface TenantError {

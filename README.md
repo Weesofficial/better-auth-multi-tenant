@@ -192,6 +192,39 @@ it, and on a tenant's host `/device/token`, `/device`, `/device/approve` and
 minutes anyway. The plugin warns at startup when `deviceAuthorization` is
 installed and `deviceCodes` is not set.
 
+## Per-tenant auth policy
+
+`getTenantPolicy` decides, per tenant, how users may sign in. It is enforced on
+the server, so a client that calls a hidden route directly is still refused:
+
+```ts
+multiTenant({
+  baseDomain: "example.com",
+  getTenant,
+  getTenantPolicy: (tenant) => ({
+    methods: tenant.ssoOnly ? ["sso"] : ["email-password", "magic-link", "social:google"],
+    signUp: tenant.openSignUp,
+    requireTwoFactor: tenant.plan === "enterprise",
+  }),
+})
+```
+
+- **`methods`**: `email-password`, `username`, `phone-number`, `magic-link`,
+  `email-otp`, `passkey`, `sso`, `siwe`, `anonymous`, `social` (every social and
+  generic OAuth provider) or `social:<id>` (one). A route of a method the tenant
+  does not list answers `403 AUTH_METHOD_NOT_ALLOWED`, at the start of the flow
+  and on its callback. Leave `methods` out to allow every method.
+- **`signUp: false`**: no new user is created on the tenant by any method
+  (`403 SIGN_UP_DISABLED`); existing users still sign in.
+- **`requireTwoFactor: true`**: a user without the `twoFactor` plugin turned on
+  gets no session from `get-session` (so `auth.api.getSession` in your own code
+  sees none either), and other auth routes answer `403 TWO_FACTOR_REQUIRED`.
+  The `/two-factor/*` enrolment routes and sign-out stay open.
+- `/multi-tenant/current` returns the tenant's `policy` so the sign-in page can
+  show only the allowed buttons.
+
+It is called at most once per request; cache it as you would `getTenant`.
+
 ## Security notes
 
 On a tenant's host the plugin refuses another tenant's session (cookie or bearer
@@ -277,6 +310,7 @@ tenant. See [docs/database-per-tenant.md](./docs/database-per-tenant.md).
 | `protocol` | `"https"` | Protocol of the `origin` returned by `/multi-tenant/current`. |
 | `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
 | `trustTenantOrigins` | `true` | Trust the requesting tenant's own subdomain or custom domain without listing it in `trustedOrigins`. Never another tenant's. |
+| `getTenantPolicy` | — | `(tenant) => ({ methods?, signUp?, requireTwoFactor? })`. Per-tenant allowed sign-in methods, sign-up and required 2FA, enforced on the server. See [Per-tenant auth policy](#per-tenant-auth-policy). |
 | `tenantBaseURL` | `false` | Build `baseURL` from the tenant's host per request, so emailed links and OAuth redirect URIs use its subdomain or custom domain. Changes `jwt` `iss`/`aud` and the redirect URIs providers must accept. |
 | `onTenantResolved` | — | Called after each successful resolution. |
 
@@ -304,6 +338,9 @@ Additional options of `createTenantAuth` (it also takes every option above excep
 | `CROSS_TENANT_SESSION` | 403 | The session belongs to a different tenant, or `/revoke-session` named another tenant's session. |
 | `UNBOUND_SESSION` | 403 | The session carries no tenant id (see `unboundSessions`). |
 | `TENANT_ACCESS_DENIED` | 403 | `canAccessTenant` did not let the user in; no session was created. |
+| `AUTH_METHOD_NOT_ALLOWED` | 403 | The tenant's policy does not allow this sign-in method (`getTenantPolicy`). |
+| `SIGN_UP_DISABLED` | 403 | The tenant's policy turns sign-up off; no user was created. |
+| `TWO_FACTOR_REQUIRED` | 403 | The tenant requires two-factor authentication and the user has not turned it on. |
 | `ORGANIZATION_TENANT_MISMATCH` | 403 | `/organization/set-active` tried to activate (or clear) an organization other than the tenant's, or an organization, team, invitation or member route named another organization's (see `getOrganizationId`). |
 | `ADMIN_TENANT_MISMATCH` | 403 | An `admin` plugin route named a user who is not a member of the tenant's organization (see `admin`). |
 | `ADMIN_NOT_TENANT_ADMIN` | 403 | The caller of an `admin` plugin route does not administer the tenant (see `canAdministerTenant`). |

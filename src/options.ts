@@ -1,6 +1,7 @@
 import type { CanAccessTenant } from "./access.js";
 import type { CanAdministerTenant } from "./admin.js";
 import type { ResolvedTenant, Tenant } from "./context.js";
+import type { GetTenantPolicy } from "./policy.js";
 import type { TenantResolutionOptions } from "./tenant.js";
 
 export interface MultiTenantOptions extends TenantResolutionOptions {
@@ -231,6 +232,12 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * redirect URIs your OAuth providers must accept.
    */
   tenantBaseURL?: boolean;
+  /**
+   * Per-tenant auth policy: which sign-in methods a tenant allows, whether it
+   * allows sign-up, and whether it requires two-factor authentication. Enforced
+   * on the server. Called at most once per request; cache it like `getTenant`.
+   */
+  getTenantPolicy?: GetTenantPolicy;
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
   /**
