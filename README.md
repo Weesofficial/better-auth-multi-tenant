@@ -1119,8 +1119,9 @@ described in [SECURITY.md](./SECURITY.md), rather than in a public issue.
 ## Contact
 
 Questions, feedback or something to show off? Message or tag the maintainer on
-X, [@patelwees](https://x.com/patelwees), or send a Discord message to
-`weespatel`. Bugs still belong in
+X, [@patelwees](https://x.com/patelwees), send a Discord message to
+`weespatel`, or connect on [LinkedIn](https://www.linkedin.com/in/gigax/).
+Bugs still belong in
 [GitHub issues](https://github.com/Weesofficial/better-auth-multi-tenant/issues),
 and security reports go through [SECURITY.md](./SECURITY.md), not public posts.
 
