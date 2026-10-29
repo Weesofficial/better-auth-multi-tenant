@@ -13,7 +13,9 @@ so security reports get priority over everything else.
 
 ## Reporting a vulnerability
 
-Please do **not** open a public issue.
+Please do **not** open a public issue or post about it publicly, including on
+X. If you can't use GitHub's private reporting, send a direct message to
+[@patelwees](https://x.com/patelwees) on X or `weespatel` on Discord instead.
 
 Report it privately through GitHub:
 [Report a vulnerability](https://github.com/Weesofficial/better-auth-multi-tenant/security/advisories/new).
