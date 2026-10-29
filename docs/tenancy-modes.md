@@ -47,12 +47,20 @@ multiTenant({
 - `/multi-tenant/current` reports the custom domain as the `origin`, and the
   resolved tenant has `source: "custom-domain"` and `domain` set.
 
-Two things are up to you:
+Verifying ownership is up to you: do it before you store a mapping, for
+example with a DNS TXT record. Whoever controls the mapping controls which
+tenant a domain serves.
 
-1. **Verify ownership** before you store a mapping, for example with a DNS TXT
-   record. Whoever controls the mapping controls which tenant a domain serves.
-2. **Trust the origin.** Add each custom domain to Better Auth's
-   `trustedOrigins`, or its CSRF checks will refuse requests from it.
+You do not need to list custom domains in Better Auth's `trustedOrigins`. With
+`trustTenantOrigins` (on by default) the plugin trusts the origin of the host a
+request arrived on when that host resolves to an active tenant, and only that
+one: a `callbackURL` on another tenant's domain is still refused.
+
+Links Better Auth builds (magic links, verification emails, OAuth redirect URIs)
+come from its `baseURL`. Set `tenantBaseURL: true` to build it from the tenant's
+host on each request, so a link sent from `app.acme.com` opens on `app.acme.com`.
+It is off by default because it also changes the `iss` and `aud` of `jwt`
+tokens and the redirect URI each OAuth provider must accept.
 
 Any host outside `baseDomain` reaches `getTenantByDomain`, so a client can make
 it query your database with made-up hosts. Wrap it in

@@ -138,7 +138,7 @@ record, passkey challenge, SIWE nonce, OAuth state) is bound to the tenant that
 issued it: redeeming it on another tenant's host is refused with
 `403 VERIFICATION_TENANT_MISMATCH` (`bindVerifications`, on by default). A link
 that is emailed (magic link, OAuth callback) must open on the tenant that sent
-it, so use a `baseURL` that follows the request host.
+it, so set `tenantBaseURL: true` or use a `baseURL` that follows the request host.
 
 [docs/auth-plugins.md](./docs/auth-plugins.md) has the compatibility table, the
 answers per plugin, and how to configure a relying party, SIWE domain, Google
@@ -276,6 +276,8 @@ tenant. See [docs/database-per-tenant.md](./docs/database-per-tenant.md).
 | `unboundSessions` | `"reject"` | `"allow"` lets sessions with no tenant through. Use only while migrating. |
 | `protocol` | `"https"` | Protocol of the `origin` returned by `/multi-tenant/current`. |
 | `port` | — | Port of the `origin` returned by `/multi-tenant/current`. |
+| `trustTenantOrigins` | `true` | Trust the requesting tenant's own subdomain or custom domain without listing it in `trustedOrigins`. Never another tenant's. |
+| `tenantBaseURL` | `false` | Build `baseURL` from the tenant's host per request, so emailed links and OAuth redirect URIs use its subdomain or custom domain. Changes `jwt` `iss`/`aud` and the redirect URIs providers must accept. |
 | `onTenantResolved` | — | Called after each successful resolution. |
 
 `cacheTenantLookup(lookup, { ttl, maxSize?, cacheMisses? })` wraps `getTenant`

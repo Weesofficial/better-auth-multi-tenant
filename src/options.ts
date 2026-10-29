@@ -214,6 +214,23 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
   protocol?: string;
   /** Port reported in the `origin` returned by `/multi-tenant/current`. */
   port?: number;
+  /**
+   * Trust the origin of the host a request arrived on when that host is an
+   * active tenant's subdomain or custom domain, without listing it in Better
+   * Auth's `trustedOrigins`. Only the requesting tenant's own origin is added,
+   * never another tenant's, so a `callbackURL` on a different tenant's domain is
+   * still refused. Defaults to `true`.
+   */
+  trustTenantOrigins?: boolean;
+  /**
+   * Build Better Auth's `baseURL` from the tenant's host on each request, so
+   * magic links, verification emails and OAuth redirect URIs point at the
+   * subdomain or custom domain the flow started on instead of one fixed host.
+   * The scheme is `protocol` when set, otherwise the request's. Defaults to
+   * `false`: it also changes the `iss` and `aud` of `jwt` tokens and the
+   * redirect URIs your OAuth providers must accept.
+   */
+  tenantBaseURL?: boolean;
   /** Called after a tenant resolves. Useful for logging and metrics. */
   onTenantResolved?: (resolved: ResolvedTenant, path: string) => void | Promise<void>;
   /**

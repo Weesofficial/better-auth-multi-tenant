@@ -171,7 +171,10 @@ tenant B, (c) does `canAccessTenant` apply, (d) what is global.
   answers `403 VERIFICATION_TENANT_MISMATCH` and leaves the link usable on its own
   tenant. The link is built from Better Auth's `baseURL`, so it must open on the
   tenant that sent it: with one fixed `baseURL` it opens on that host and is
-  refused for every other tenant. Use a `baseURL` that follows the request host:
+  refused for every other tenant. Set `tenantBaseURL: true` so the link is built
+  on the tenant's subdomain or custom domain (test: `test/tenant-origins.test.ts`),
+  or use Better Auth's `baseURL` that follows the request host, which covers
+  subdomains but not custom domains:
 
   ```ts
   betterAuth({
