@@ -4,6 +4,11 @@
 [![npm downloads](https://img.shields.io/npm/dm/better-auth-multi-tenant)](https://www.npmjs.com/package/better-auth-multi-tenant)
 [![CI](https://github.com/Weesofficial/better-auth-multi-tenant/actions/workflows/ci.yml/badge.svg)](https://github.com/Weesofficial/better-auth-multi-tenant/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](./LICENSE)
+[![Types: TypeScript](https://img.shields.io/npm/types/better-auth-multi-tenant)](https://www.npmjs.com/package/better-auth-multi-tenant)
+[![Better Auth](https://img.shields.io/npm/dependency-version/better-auth-multi-tenant/peer/better-auth)](https://better-auth.com)
+[![npm provenance](https://img.shields.io/badge/npm-provenance-green)](https://www.npmjs.com/package/better-auth-multi-tenant#provenance)
+[![GitHub stars](https://img.shields.io/github/stars/Weesofficial/better-auth-multi-tenant)](https://github.com/Weesofficial/better-auth-multi-tenant/stargazers)
+[![Follow @patelwees](https://img.shields.io/twitter/follow/patelwees)](https://x.com/patelwees)
 
 Multi-tenancy for [Better Auth](https://better-auth.com), by subdomain, custom
 domain or path.
