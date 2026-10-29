@@ -1,6 +1,10 @@
 # Changelog
 
-## Unreleased
+## 0.7.0
+
+Nothing that worked in 0.6 is refused. Every new option is opt-in except
+`trustTenantOrigins`, which only adds the requesting tenant's own origin to
+`trustedOrigins`; set it to `false` to keep the list exactly as configured.
 
 ### Added
 
