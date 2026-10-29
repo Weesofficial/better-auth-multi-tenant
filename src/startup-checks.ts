@@ -59,7 +59,7 @@ export function checkSetup(
     if (installed(id)) {
       ctx.logger.warn(
         `[better-auth-multi-tenant] ${name} is installed but not tenant-scoped: its clients, connections and access tokens are shared by every tenant, ` +
-          "and its access tokens are not checked against the request's tenant. See the README's compatibility notes.",
+          "and its access tokens are not checked against the request's tenant. See docs/security.md.",
       );
     }
   }
