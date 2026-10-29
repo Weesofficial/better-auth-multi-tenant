@@ -119,6 +119,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     trustTenantOrigins = true,
     tenantBaseURL = false,
     getTenantPolicy,
+    oauthProxyHost,
     ...resolverOptions
   } = options;
   assertTrustProxy(resolverOptions.trustProxy);
@@ -139,6 +140,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     tenantCookies,
     tenantBaseURL,
     protocol,
+    oauthProxyHost,
     onTenantResolved,
   });
   const trusted = trustTenantOrigins ? { trustedOrigins: tenantTrustedOrigins(lookup, protocol) } : {};
@@ -156,6 +158,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         apiKeys,
         deviceCodes,
         sso: ssoOption,
+        oauthProxyHost,
         bindVerifications,
         adminScoped,
         hasSSOMapping,

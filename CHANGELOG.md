@@ -21,6 +21,15 @@
   (`get-session` reports no session and other auth routes answer
   `TWO_FACTOR_REQUIRED` until it is on). `/multi-tenant/current` returns the
   policy for the sign-in page.
+- **OAuth across tenant hosts** (`oauthProxyHost`). With Better Auth's
+  `oAuthProxy`, providers redirect to one auth host, which hands the profile to
+  the tenant the flow started on; only that host's callback URL has to be
+  registered with each provider. The proxy host serves the provider callback
+  without a tenant and nothing else; the hand-off is tied to the starting
+  tenant's OAuth state, so it is refused on any other tenant. The tenant's policy
+  applies to the hand-off, and the deprecated `/oauth-proxy-callback` counts as
+  `social` (every provider). Startup warns when `oAuthProxy` is installed
+  without `oauthProxyHost`.
 
 ## 0.6.0
 
