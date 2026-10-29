@@ -6,3 +6,6 @@ contact_links:
   - name: Better Auth itself
     url: https://github.com/better-auth/better-auth/issues
     about: Problems with Better Auth that happen without this plugin installed.
+  - name: Questions and feedback on X
+    url: https://x.com/patelwees
+    about: Message or tag @patelwees. Not for security reports.
