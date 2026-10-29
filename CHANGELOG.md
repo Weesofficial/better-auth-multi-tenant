@@ -14,6 +14,13 @@
 - **`tenantBaseURL`** (off by default) builds Better Auth's `baseURL` from the
   tenant's host on each request, so magic links, verification emails and OAuth
   redirect URIs open on the subdomain or custom domain the flow started on.
+- **Per-tenant auth policy** (`getTenantPolicy`). Per tenant: which sign-in
+  methods are allowed (`AUTH_METHOD_NOT_ALLOWED`, checked when a flow starts and
+  on its callback), whether sign-up is open (`SIGN_UP_DISABLED`, for every
+  method that creates a user), and whether two-factor authentication is required
+  (`get-session` reports no session and other auth routes answer
+  `TWO_FACTOR_REQUIRED` until it is on). `/multi-tenant/current` returns the
+  policy for the sign-in page.
 
 ## 0.6.0
 

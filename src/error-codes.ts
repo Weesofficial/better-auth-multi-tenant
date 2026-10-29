@@ -61,6 +61,15 @@ export const ERROR_CODES = {
     code: "SSO_PROVIDER_TENANT_MISMATCH",
     message: "This SSO provider does not belong to this tenant",
   },
+  AUTH_METHOD_NOT_ALLOWED: {
+    code: "AUTH_METHOD_NOT_ALLOWED",
+    message: "This tenant does not allow this sign-in method",
+  },
+  SIGN_UP_DISABLED: { code: "SIGN_UP_DISABLED", message: "This tenant does not allow sign-up" },
+  TWO_FACTOR_REQUIRED: {
+    code: "TWO_FACTOR_REQUIRED",
+    message: "This tenant requires two-factor authentication; turn it on first",
+  },
 } as const;
 
 export type TenantErrorCode = keyof typeof ERROR_CODES;

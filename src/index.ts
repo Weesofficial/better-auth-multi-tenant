@@ -41,6 +41,7 @@ import { multiSessionHooks } from "./multi-session.js";
 import { requestResolver, tenantTrustedOrigins } from "./request.js";
 import { revokeScopeHook } from "./revoke.js";
 import { sameOriginHook } from "./same-origin.js";
+import { policyBeforeHook, policyFor, policySessionHook, policyUserCreateHook, publicPolicy } from "./policy.js";
 import { resolveScoping } from "./scoping.js";
 import { defaultEnforceSessionTenant, listSessionsHook, revokeSessionHook, sessionTenantHook } from "./session-binding.js";
 import { ssoGuardHooks, ssoRefuseHook } from "./sso.js";
@@ -54,6 +55,7 @@ export { organizationMembersOnly } from "./access.js";
 export { organizationAdminsOnly } from "./admin.js";
 export type { CanAdministerTenant, TenantAdminContext } from "./admin.js";
 export type { CanAccessTenant, TenantAccessContext } from "./access.js";
+export type { GetTenantPolicy, TenantAuthMethod, TenantPolicy } from "./policy.js";
 export { createTenantAuth } from "./tenant-auth.js";
 export type { TenantAuth, TenantAuthOptions } from "./tenant-auth.js";
 export { tenantSessionHooks } from "./session-hooks.js";
@@ -116,6 +118,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
     tenantCookies: tenantCookiesOption,
     trustTenantOrigins = true,
     tenantBaseURL = false,
+    getTenantPolicy,
     ...resolverOptions
   } = options;
   assertTrustProxy(resolverOptions.trustProxy);
@@ -172,12 +175,19 @@ export const multiTenant = (options: MultiTenantOptions) => {
 
       const accessHooks = canAccessTenant ? { create: { before: tenantAccessHook(canAccessTenant) } } : {};
       const verificationHooks = bindVerifications ? verificationBindingHooks() : {};
+      const userHooks = getTenantPolicy ? { user: { create: { before: policyUserCreateHook(getTenantPolicy) } } } : {};
       if (!getOrganizationId) {
         return {
           options: {
             ...trusted,
-            ...(canAccessTenant || bindVerifications
-              ? { databaseHooks: { ...verificationHooks, ...(canAccessTenant ? { session: accessHooks } : {}) } }
+            ...(canAccessTenant || bindVerifications || getTenantPolicy
+              ? {
+                  databaseHooks: {
+                    ...verificationHooks,
+                    ...userHooks,
+                    ...(canAccessTenant ? { session: accessHooks } : {}),
+                  },
+                }
               : {}),
           },
         };
@@ -190,6 +200,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
           ...trusted,
           databaseHooks: {
             ...verificationHooks,
+            ...userHooks,
             session: {
               ...accessHooks,
               update: { before: activeOrganizationGuard(teamsScoped, teamsEnabled) },
@@ -226,6 +237,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
         },
         sessionTenantHook(getSessionTenantId, enforceSessionTenant, unboundSessions),
         ...(sameOriginOnly ? [sameOriginHook(resolverOptions.trustProxy)] : []),
+        ...(getTenantPolicy ? [policyBeforeHook(getTenantPolicy)] : []),
         organizationCreateHook,
         revokeSessionHook(getSessionTenantId),
         foreignSessionHook(getSessionTenantId, enforceSessionTenant),
@@ -241,6 +253,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
       ],
       after: [
         listSessionsHook(getSessionTenantId),
+        ...(getTenantPolicy ? [policySessionHook(getTenantPolicy)] : []),
         organizationListHook,
         ...(teamsScoped ? [teamListHook] : []),
         ...(getOrganizationId ? [invitationListHook] : []),
@@ -265,6 +278,7 @@ export const multiTenant = (options: MultiTenantOptions) => {
               : baseDomain && resolved.source !== "path"
                 ? tenantOrigin(resolved.slug, { baseDomain, protocol, port })
                 : new URL(ctx.context.baseURL).origin,
+            ...(getTenantPolicy ? { policy: publicPolicy((await policyFor(ctx.context, getTenantPolicy)) ?? {}) } : {}),
           });
         },
       ),
