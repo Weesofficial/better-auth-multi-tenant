@@ -144,5 +144,6 @@ export const requestResolver =
       }
     }
     await onTenantResolved?.(resolved, path);
+    (ctx.context as Record<symbol, unknown>)[RESOLVED] = { scoped };
     return scoped;
   };

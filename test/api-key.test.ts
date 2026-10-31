@@ -56,6 +56,18 @@ for (const apiKeyFirst of [false, true]) {
     const write = await request("globex.example.com", "/update-user", { method: "POST", body: { name: "Mallory" }, headers: { "x-api-key": key } });
     assert.equal(write.status, 403);
   });
+
+  test(`a request with a key resolves its tenant once (api-key plugin ${apiKeyFirst ? "first" : "second"})`, async () => {
+    const seen: string[] = [];
+    const { request, signUp, createKey } = keySetup({ onTenantResolved: (r, path) => void seen.push(`${r.slug} ${path}`) }, { apiKeyFirst });
+    const cookie = await signUp("acme.example.com");
+    const { key } = await createKey("acme.example.com", cookie);
+    seen.length = 0;
+
+    const res = await request("acme.example.com", "/get-session", { headers: { "x-api-key": key } });
+    assert.equal(res.status, 200, await res.clone().text());
+    assert.deepEqual(seen, ["acme /get-session"]);
+  });
 }
 
 test("a key with no tenant is refused as a session unless unboundSessions is allow", async () => {

@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- The tenant is now resolved once per request when it is found, not only when
+  it is not. With `apiKeys: true`, a request carrying an API key resolved it
+  twice: `getTenant` and `onTenantResolved` ran twice, and with path tenancy
+  the tenant prefix could be added to `baseURL` twice.
+
 ## 0.7.0
 
 Nothing that worked in 0.6 is refused. Every new option is opt-in except
