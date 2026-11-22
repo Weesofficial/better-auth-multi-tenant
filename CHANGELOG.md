@@ -8,6 +8,17 @@
   it is not. With `apiKeys: true`, a request carrying an API key resolved it
   twice: `getTenant` and `onTenantResolved` ran twice, and with path tenancy
   the tenant prefix could be added to `baseURL` twice.
+- **Tenant origins behind a TLS-terminating proxy.** With `trustProxy` on and
+  no `protocol`, `trustTenantOrigins` trusted `http://<tenant host>` because the
+  request reaching the app is plain http, so every POST from the tenant's
+  `https://` page was refused with `403 INVALID_ORIGIN`, and `tenantBaseURL`
+  built `http://` links. The scheme now comes from `X-Forwarded-Proto` (or
+  `Forwarded: proto=`) when `trustProxy` trusts the request, read from the same
+  hop as the host. `protocol` still wins when set.
+- **Per-tenant policy and `genericOAuth` on Better Auth 1.6.** The 1.6 callback
+  route `/oauth2/callback/:providerId` was mapped to the method
+  `social::providerId`, so a tenant allowing `social:<id>` refused its own
+  provider's callback.
 
 ## 0.7.0
 
