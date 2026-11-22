@@ -69,12 +69,12 @@ function splitOutsideQuotes(input: string, separator: string): string[] {
   return parts;
 }
 
-/** The `host=` of each `Forwarded` element; `null` for an element without one or with a broken quote. */
-function forwardedHosts(header: string): (string | null)[] {
+/** The `<param>=` of each `Forwarded` element; `null` for an element without one or with a broken quote. */
+function forwardedParams(header: string, param: "host" | "proto"): (string | null)[] {
   return splitOutsideQuotes(header, ",").map((element) => {
     for (const pair of splitOutsideQuotes(element, ";")) {
       const eq = pair.indexOf("=");
-      if (eq === -1 || pair.slice(0, eq).trim().toLowerCase() !== "host") continue;
+      if (eq === -1 || pair.slice(0, eq).trim().toLowerCase() !== param) continue;
       let value = pair.slice(eq + 1).trim();
       if (value.startsWith('"')) {
         if (value.length < 2 || !value.endsWith('"')) return null;
@@ -100,10 +100,31 @@ function forwardedHosts(header: string): (string | null)[] {
  * different hosts, is rejected. With neither header present the request did not
  * come through a proxy and `Host` is used.
  */
+const trustedHops = (req: ProxyRequest, trustProxy: TrustProxy | undefined): number =>
+  typeof trustProxy === "function" ? (trustProxy(req) === true ? 1 : 0) : trustProxy === true ? 1 : trustProxy || 0;
+
+/**
+ * The scheme the original client used (`"http"` or `"https"`), read from
+ * `X-Forwarded-Proto` or `Forwarded: proto=` the same way {@link requestHost}
+ * reads the host. `undefined` when no proxy is trusted for this request or it
+ * sent no usable value, so the caller falls back to the request's own scheme.
+ */
+export function requestProtocol(req: ProxyRequest, trustProxy: TrustProxy | undefined): string | undefined {
+  const hops = trustedHops(req, trustProxy);
+  if (hops === 0) return undefined;
+  const pick = (entries: (string | null)[]) => {
+    const entry = entries.length >= hops ? entries[entries.length - hops]?.trim().toLowerCase() : undefined;
+    return entry === "http" || entry === "https" ? entry : undefined;
+  };
+  const xfp = req.headers.get("x-forwarded-proto");
+  const forwarded = req.headers.get("forwarded");
+  if ((xfp?.length ?? 0) > MAX_HEADER_LENGTH || (forwarded?.length ?? 0) > MAX_HEADER_LENGTH) return undefined;
+  return (xfp === null ? undefined : pick(xfp.split(","))) ?? (forwarded === null ? undefined : pick(forwardedParams(forwarded, "proto")));
+}
+
 export function requestHost(req: ProxyRequest, trustProxy: TrustProxy | undefined): RequestHost {
   const direct = req.headers.get("host");
-  const hops =
-    typeof trustProxy === "function" ? (trustProxy(req) === true ? 1 : 0) : trustProxy === true ? 1 : trustProxy || 0;
+  const hops = trustedHops(req, trustProxy);
   if (hops === 0) return { ok: true, host: direct };
 
   const xfh = req.headers.get("x-forwarded-host");
@@ -116,7 +137,7 @@ export function requestHost(req: ProxyRequest, trustProxy: TrustProxy | undefine
     return entry == null ? null : validHost(entry);
   };
   const fromXfh = xfh === null ? undefined : pick(xfh.split(","));
-  const fromForwarded = forwarded === null ? undefined : pick(forwardedHosts(forwarded));
+  const fromForwarded = forwarded === null ? undefined : pick(forwardedParams(forwarded, "host"));
 
   if (fromXfh === null || fromForwarded === null) return { ok: false };
   if (fromXfh !== undefined && fromForwarded !== undefined && fromXfh.toLowerCase() !== fromForwarded.toLowerCase()) {

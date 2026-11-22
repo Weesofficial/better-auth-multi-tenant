@@ -2,7 +2,7 @@ import { createCookieGetter, getCookies } from "better-auth/cookies";
 import { setTenantOnContext, type ResolvedTenant, type Tenant } from "./context.js";
 import { setScopedHeaders, withoutCookies } from "./foreign-session.js";
 import { trimTrailingSlashes } from "./path.js";
-import { requestHost } from "./proxy.js";
+import { requestHost, requestProtocol } from "./proxy.js";
 import { normalizeHost } from "./resolver.js";
 import { resolveTenant, type TenantLookup } from "./tenant.js";
 
@@ -32,7 +32,11 @@ function tenantHostOrigin(
   if (!headers) return null;
   const host = requestHost({ headers, request }, lookup.trustProxy);
   if (!host.ok || !host.host) return null;
-  const scheme = protocol ?? (request ? new URL(request.url).protocol.slice(0, -1) : "https");
+  // Behind a TLS-terminating proxy the request itself is plain http.
+  const scheme =
+    protocol ??
+    requestProtocol({ headers, request }, lookup.trustProxy) ??
+    (request ? new URL(request.url).protocol.slice(0, -1) : "https");
   return `${scheme}://${host.host.toLowerCase()}`;
 }
 

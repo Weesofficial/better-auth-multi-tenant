@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { createTenantAuth, requestHost, type TrustProxy } from "../src/index.js";
+import { requestProtocol } from "../src/proxy.js";
 import { codeOf, setup, TENANTS } from "./helpers.js";
 
 const hostOf = (headers: Record<string, string>, trustProxy?: TrustProxy) => {
@@ -190,4 +191,17 @@ test("createTenantAuth honors trustProxy and ignores the header without it", asy
   const res = await get(make(true));
   assert.equal(((await res.json()) as { slug: string }).slug, "acme");
   assert.throws(() => make(-1), RangeError);
+});
+
+test("requestProtocol reads the forwarded scheme only from trusted hops", () => {
+  const protoOf = (headers: Record<string, string>, trustProxy?: TrustProxy) =>
+    requestProtocol({ headers: new Headers(headers) }, trustProxy);
+  assert.equal(protoOf({ "x-forwarded-proto": "https" }), undefined);
+  assert.equal(protoOf({ "x-forwarded-proto": "https" }, true), "https");
+  assert.equal(protoOf({ "x-forwarded-proto": "http, HTTPS" }, 1), "https");
+  assert.equal(protoOf({ "x-forwarded-proto": "http, https" }, 2), "http");
+  assert.equal(protoOf({ "x-forwarded-proto": "https" }, 2), undefined);
+  assert.equal(protoOf({ forwarded: 'for=1.2.3.4;proto="https";host=a.example.com' }, true), "https");
+  assert.equal(protoOf({ "x-forwarded-proto": "javascript" }, true), undefined);
+  assert.equal(protoOf({ "x-forwarded-proto": "https" }, () => false), undefined);
 });
