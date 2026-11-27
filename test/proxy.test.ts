@@ -203,5 +203,7 @@ test("requestProtocol reads the forwarded scheme only from trusted hops", () => 
   assert.equal(protoOf({ "x-forwarded-proto": "https" }, 2), undefined);
   assert.equal(protoOf({ forwarded: 'for=1.2.3.4;proto="https";host=a.example.com' }, true), "https");
   assert.equal(protoOf({ "x-forwarded-proto": "javascript" }, true), undefined);
+  assert.equal(protoOf({ "x-forwarded-proto": "https", forwarded: "proto=http" }, true), undefined);
+  assert.equal(protoOf({ "x-forwarded-proto": "https", forwarded: "proto=https" }, true), "https");
   assert.equal(protoOf({ "x-forwarded-proto": "https" }, () => false), undefined);
 });

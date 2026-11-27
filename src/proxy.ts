@@ -119,7 +119,11 @@ export function requestProtocol(req: ProxyRequest, trustProxy: TrustProxy | unde
   const xfp = req.headers.get("x-forwarded-proto");
   const forwarded = req.headers.get("forwarded");
   if ((xfp?.length ?? 0) > MAX_HEADER_LENGTH || (forwarded?.length ?? 0) > MAX_HEADER_LENGTH) return undefined;
-  return (xfp === null ? undefined : pick(xfp.split(","))) ?? (forwarded === null ? undefined : pick(forwardedParams(forwarded, "proto")));
+  const fromXfp = xfp === null ? undefined : pick(xfp.split(","));
+  const fromForwarded = forwarded === null ? undefined : pick(forwardedParams(forwarded, "proto"));
+  // Headers that disagree: one of them was not written by your proxy, so trust neither.
+  if (fromXfp && fromForwarded && fromXfp !== fromForwarded) return undefined;
+  return fromXfp ?? fromForwarded;
 }
 
 export function requestHost(req: ProxyRequest, trustProxy: TrustProxy | undefined): RequestHost {
