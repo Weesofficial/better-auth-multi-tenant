@@ -32,13 +32,15 @@ jobs:
       - run: npm ci
       # Not --no-save: npm 10 crashes on it (Cannot read properties of null, edgesOut).
       # Every Better Auth package moves together, and better-call is pinned to the
-      # release's own version: the lockfile can leave a second copy of it (or a
-      # newer @better-auth/core) behind, and two copies make the types disagree.
+      # release's own version: the lockfile can leave a second copy of it behind,
+      # and two copies make the types disagree. @better-auth/core comes with
+      # better-auth; naming it here crashes npm (reading 'spec'), as it is a peer
+      # dependency of this package.
       - if: matrix.deps != 'lockfile'
         run: |
           better_call="$(npm view better-auth@${{ matrix.deps }} dependencies.better-call)"
           npm install --no-audit --no-fund --legacy-peer-deps \
-            better-auth@${{ matrix.deps }} @better-auth/core@${{ matrix.deps }} @better-auth/sso@${{ matrix.deps }} \
+            better-auth@${{ matrix.deps }} @better-auth/sso@${{ matrix.deps }} \
             @better-auth/api-key@${{ matrix.deps }} @better-auth/passkey@${{ matrix.deps }} "better-call@$better_call"
       - run: npm run typecheck
       - run: npm test
