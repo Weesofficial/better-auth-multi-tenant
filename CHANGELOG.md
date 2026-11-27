@@ -19,6 +19,12 @@
   route `/oauth2/callback/:providerId` was mapped to the method
   `social::providerId`, so a tenant allowing `social:<id>` refused its own
   provider's callback.
+- **`identity: "tenant"` with Better Auth 1.7.2x one-time codes.** Better Auth
+  now derives a verification row's primary key from its identifier, so the same
+  email on two tenants gave both tenants' codes the same key: on a real database
+  the second tenant's code could not be stored, and its sign-in failed. The key
+  is now made per tenant, in the same format, and the adapter's new `consumeOne`
+  is limited to the requesting tenant like every other query.
 
 ## 0.7.0
 
