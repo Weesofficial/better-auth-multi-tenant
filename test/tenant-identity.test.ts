@@ -99,6 +99,22 @@ test("one-time codes for the same email on two tenants do not overwrite each oth
   assert.equal((await signIn(GLOBEX, globexOtp)).status, 200);
 });
 
+test("the same identifier on two tenants gets two primary keys", async () => {
+  // Better Auth 1.7.2x derives a verification id from its identifier; a real
+  // database would refuse the second tenant's row. The memory adapter does not
+  // enforce primary keys, so compare the ids.
+  const { signUpWith, request, db } = identitySetup();
+  await signUpWith(ACME, "acme-password-1");
+  await signUpWith(GLOBEX, "globex-password-1");
+  for (const host of [ACME, GLOBEX]) {
+    const res = await request(host, "/email-otp/send-verification-otp", { method: "POST", body: { email: EMAIL, type: "sign-in" } });
+    assert.equal(res.status, 200);
+  }
+  const rows = db.verification.filter((v) => v.identifier === `sign-in-otp-${EMAIL}`);
+  assert.equal(rows.length, 2);
+  assert.notEqual(rows[0]!.id, rows[1]!.id);
+});
+
 test("a user query with no tenant is refused, not run across tenants", async () => {
   const { auth, signUpWith } = identitySetup();
   await signUpWith(ACME, "acme-password-1");

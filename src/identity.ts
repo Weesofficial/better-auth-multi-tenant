@@ -18,7 +18,48 @@ type Args = { model: string; where?: Where[]; data?: Record<string, unknown>; [k
 type Adapter = Record<string, any>;
 
 const SCOPED = new Set(["user", "account"]);
-const QUERIES = new Set(["findOne", "findMany", "count", "update", "updateMany", "delete", "deleteMany"]);
+const QUERIES = new Set(["findOne", "findMany", "count", "update", "updateMany", "delete", "deleteMany", "consumeOne"]);
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const OBJECT_ID = /^[0-9a-f]{24}$/i;
+const hexOf = (bytes: Uint8Array) => Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+const base64UrlOf = (bytes: Uint8Array) =>
+  btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+
+/**
+ * Better Auth (1.7.2x) derives a verification row's primary key from its
+ * identifier, so one identifier has one row. With tenant-scoped identity the
+ * same email on two tenants is the same identifier, so both tenants' rows
+ * would share a key: the second insert fails, or overwrites the first. This
+ * turns such an id into one of the same shape that also depends on the tenant.
+ */
+async function tenantVerificationId(tenantId: string, id: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`${tenantId}:${id}`)));
+  if (UUID.test(id)) {
+    const bytes = digest.slice(0, 16);
+    bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+    bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+    const h = hexOf(bytes);
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  }
+  if (OBJECT_ID.test(id)) return hexOf(digest.slice(0, 12));
+  return base64UrlOf(digest).slice(0, id.length);
+}
+
+/**
+ * A lookup by a verification id matches the id as given or its tenant form:
+ * rows read back already carry the tenant form, while Better Auth's own
+ * "already reserved?" check recomputes the original.
+ */
+async function withTenantIds(where: Where[], tenantId: string): Promise<Where[]> {
+  return Promise.all(
+    where.map(async (w) =>
+      w.field === "id" && (w.operator ?? "eq") === "eq" && typeof w.value === "string"
+        ? { ...w, operator: "in", value: [w.value, await tenantVerificationId(tenantId, w.value)] }
+        : w,
+    ),
+  );
+}
 
 type Store = { getStore(): { context?: unknown } | undefined };
 let storage: Promise<Store> | undefined;
@@ -55,10 +96,18 @@ export function tenantScopedAdapter(base: Adapter, { verification }: { verificat
             if (args.model === "verification") return value.call(target, args, ...rest);
             throw new APIError("BAD_REQUEST", ERROR_CODES.TENANT_REQUIRED);
           }
-          const next: Args =
-            prop === "create"
-              ? { ...args, data: { ...args.data, tenantId } }
-              : { ...args, where: [...(args.where ?? []), { field: "tenantId", value: tenantId, operator: "eq", connector: "AND" }] };
+          const verificationRow = args.model === "verification";
+          let next: Args;
+          if (prop === "create") {
+            const id = args.data?.id;
+            next = {
+              ...args,
+              data: { ...args.data, tenantId, ...(verificationRow && typeof id === "string" ? { id: await tenantVerificationId(tenantId, id) } : {}) },
+            };
+          } else {
+            const where = verificationRow ? await withTenantIds(args.where ?? [], tenantId) : (args.where ?? []);
+            next = { ...args, where: [...where, { field: "tenantId", value: tenantId, operator: "eq", connector: "AND" }] };
+          }
           return value.call(target, next, ...rest);
         };
       },

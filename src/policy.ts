@@ -78,7 +78,9 @@ function methodOf(ctx: { path?: string; params?: Record<string, string | undefin
   if (path === "/one-tap/callback") return "social:google";
   // Deprecated oAuthProxy hand-off: the provider is only known after decrypting.
   if (path === "/oauth-proxy-callback") return "social";
-  if (path.startsWith("/callback/") || path.startsWith("/oauth2/callback/")) return provider(ctx.params?.id ?? lastSegment(path));
+  // genericOAuth on Better Auth 1.6 names its callback param `providerId`.
+  if (path.startsWith("/callback/") || path.startsWith("/oauth2/callback/"))
+    return provider(ctx.params?.id ?? ctx.params?.providerId ?? lastSegment(path));
   return null;
 }
 

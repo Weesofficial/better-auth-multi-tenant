@@ -227,7 +227,9 @@ export interface MultiTenantOptions extends TenantResolutionOptions {
    * Build Better Auth's `baseURL` from the tenant's host on each request, so
    * magic links, verification emails and OAuth redirect URIs point at the
    * subdomain or custom domain the flow started on instead of one fixed host.
-   * The scheme is `protocol` when set, otherwise the request's. Defaults to
+   * The scheme is `protocol` when set, otherwise `X-Forwarded-Proto` (or
+   * `Forwarded: proto=`) when `trustProxy` trusts the request, otherwise the
+   * request's own. Defaults to
    * `false`: it also changes the `iss` and `aud` of `jwt` tokens and the
    * redirect URIs your OAuth providers must accept.
    */

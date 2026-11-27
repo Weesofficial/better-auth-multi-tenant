@@ -125,3 +125,47 @@ test("tenantBaseURL honours the protocol option", async () => {
   assert.equal(res.status, 200, await res.clone().text());
   assert.equal(new URL(links[0]!).origin, "https://globex.example.com");
 });
+
+// Behind a TLS-terminating proxy the request reaching the app is plain http;
+// the scheme the browser used is in X-Forwarded-Proto.
+const behindProxy = (host: string, path: string, body: unknown) =>
+  new Request(`http://10.0.0.5:3000/api/auth${path}`, {
+    method: "POST",
+    body: JSON.stringify(body),
+    headers: {
+      host: "10.0.0.5:3000",
+      "x-forwarded-host": host,
+      "x-forwarded-proto": "https",
+      origin: `https://${host}`,
+      "content-type": "application/json",
+    },
+  });
+
+test("behind a trusted proxy, the tenant's https origin is trusted", async () => {
+  const { auth } = setup({ getTenantByDomain, trustProxy: true }, { trustedOrigins: [] });
+  const res = await auth.handler(behindProxy("app.acme.test", "/sign-up/email", signUpBody()));
+  assert.equal(res.status, 200, await res.clone().text());
+});
+
+test("behind a trusted proxy, tenantBaseURL builds https links", async () => {
+  const links: string[] = [];
+  const { auth } = setup(
+    { getTenantByDomain, trustProxy: true, tenantBaseURL: true },
+    { trustedOrigins: [], plugins: [magicLink({ sendMagicLink: async ({ url }) => void links.push(url) })] },
+  );
+  const res = await auth.handler(behindProxy("app.acme.test", "/sign-in/magic-link", { email: "user@example.com" }));
+  assert.equal(res.status, 200, await res.clone().text());
+  assert.equal(new URL(links[0]!).origin, "https://app.acme.test");
+});
+
+test("X-Forwarded-Proto is ignored without trustProxy", async () => {
+  const { auth } = setup({ getTenantByDomain }, { trustedOrigins: [] });
+  const req = new Request("http://app.acme.test/api/auth/sign-up/email", {
+    method: "POST",
+    body: JSON.stringify(signUpBody()),
+    headers: { host: "app.acme.test", "x-forwarded-proto": "https", origin: "https://app.acme.test", "content-type": "application/json" },
+  });
+  const res = await auth.handler(req);
+  assert.equal(res.status, 403);
+  assert.equal(await codeOf(res), "INVALID_ORIGIN");
+});
