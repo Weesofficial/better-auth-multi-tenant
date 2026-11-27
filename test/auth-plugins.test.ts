@@ -85,7 +85,10 @@ test("username: canAccessTenant refuses the session", async () => {
 
 test("phoneNumber: a password sign-in session is stamped and refused on another tenant; the number is global", async () => {
   const { db, request, signUpWith } = pluginSetup();
-  await signUpWith(ACME, { phoneNumber: PHONE });
+  await signUpWith(ACME, {});
+  // Better Auth 1.7.18 refuses a phone number at sign-up (it must be verified),
+  // so give the user one as a verified OTP would.
+  Object.assign(db.user.at(-1)!, { phoneNumber: PHONE, phoneNumberVerified: true });
   const res = await request(ACME, "/sign-in/phone-number", { method: "POST", body: { phoneNumber: PHONE, password: PASSWORD } });
   assert.equal(res.status, 200, await res.clone().text());
   assert.equal(db.session.at(-1)!.tenantId, "t_acme");
